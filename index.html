@@ -373,6 +373,19 @@
     return Array.from(map.values());
   }
 
+  // Guarda/lee/borra la sesión en el navegador para no tener que
+  // volver a ingresar el PIN cada vez que se abre la app.
+  const SESSION_KEY = "controlStockSession";
+  function saveSession(data){
+    try{ localStorage.setItem(SESSION_KEY, JSON.stringify(data)); }catch(e){}
+  }
+  function readSession(){
+    try{ return JSON.parse(localStorage.getItem(SESSION_KEY)); }catch(e){ return null; }
+  }
+  function clearSession(){
+    try{ localStorage.removeItem(SESSION_KEY); }catch(e){}
+  }
+
   // Limita un input de PIN a máximo 4 dígitos numéricos
   function restrictPinInput(el){
     if(!el) return;
@@ -471,6 +484,21 @@
 
       movements = movSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
+      // Si había una sesión guardada en este navegador, se restaura
+      // en vez de mostrar la pantalla de login.
+      const session = readSession();
+      if(session && session.type === "user"){
+        const emp = employees.find(e => e.id === session.empId);
+        if(emp){
+          currentUser = { id: emp.id, name: emp.name };
+          view = "form";
+        }else{
+          clearSession();
+        }
+      }else if(session && session.type === "admin"){
+        view = "admin";
+      }
+
       render();
     }catch(err){
       app.innerHTML = `
@@ -562,6 +590,7 @@
       }
       currentUser = { id: emp.id, name: emp.name };
       view = "form";
+      saveSession({ type:"user", empId: emp.id });
       render();
     };
     document.getElementById("goAdmin").onclick = () => { view = "admin-login"; render(); };
@@ -622,7 +651,7 @@
     Array.from(document.querySelectorAll("#catTabs button")).forEach(b=>{
       b.onclick = () => { selectedCategory = b.dataset.cat; render(); };
     });
-    document.getElementById("logoutBtn").onclick = () => { currentUser=null; view="login"; render(); };
+    document.getElementById("logoutBtn").onclick = () => { currentUser=null; view="login"; clearSession(); render(); };
 
     document.getElementById("submitBtn").onclick = async () => {
       const prodId = document.getElementById("prodSelect").value;
@@ -680,7 +709,9 @@
         document.getElementById("adminMsg").innerHTML = `<div class="msg error">PIN incorrecto.</div>`;
         return;
       }
-      view = "admin"; render();
+      view = "admin";
+      saveSession({ type:"admin" });
+      render();
     };
   }
 
@@ -708,7 +739,7 @@
         <div id="adminContent"></div>
       </section>
     `;
-    document.getElementById("logoutAdmin").onclick = () => { view="login"; render(); };
+    document.getElementById("logoutAdmin").onclick = () => { view="login"; clearSession(); render(); };
     document.getElementById("exportAllBtn").onclick = () => {
       const movRows = movements.slice().sort((a,b)=>a.ts-b.ts);
       const movAoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Timestamp"]];
