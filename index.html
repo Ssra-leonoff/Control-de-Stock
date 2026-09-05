@@ -493,7 +493,8 @@
       movements = movSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
       // Si había una sesión guardada en este navegador, se restaura
-      // en vez de mostrar la pantalla de login.
+      // en vez de mostrar la pantalla de login. La de administrador
+      // nunca se guarda, así que siempre va a pedir el PIN de nuevo.
       const session = readSession();
       if(session && session.type === "user"){
         const emp = employees.find(e => e.id === session.empId);
@@ -503,8 +504,6 @@
         }else{
           clearSession();
         }
-      }else if(session && session.type === "admin"){
-        view = "admin";
       }
 
       render();
@@ -718,7 +717,6 @@
         return;
       }
       view = "admin";
-      saveSession({ type:"admin" });
       render();
     };
   }
