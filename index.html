@@ -98,6 +98,7 @@
   .emp-row input{margin-bottom:0;}
   .emp-row input[type=text]{flex:2;}
   .emp-row input[type=tel]{flex:1;}
+  .emp-row select{margin-bottom:0;flex:1;min-width:150px;}
   .small-btn{padding:8px 10px;font-size:12px;border-radius:6px;border:1px solid var(--line);background:#fff;cursor:pointer;color:var(--ink-soft);}
   .small-btn-danger{color:var(--red);border-color:var(--red);}
 
@@ -108,6 +109,8 @@
   .tabs{display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap;}
   .tabs button{flex:1;padding:9px;border-radius:8px;border:1px solid var(--line);background:#fff;font-size:12px;font-weight:700;color:var(--ink-soft);cursor:pointer;min-width:80px;}
   .tabs button.active{background:var(--navy);color:#fff;border-color:var(--navy);}
+  #catTabs{gap:10px;}
+  #catTabs button{padding:18px 10px;font-size:17px;min-width:120px;border-radius:12px;}
 
   .btn-primary.btn-success{background:var(--green);transition:background .2s ease;}
 
@@ -198,6 +201,16 @@
     ["Gonzalo","2013"],["Jonn","2014"]
   ];
 
+  // Categorías de productos a las que puede acceder cada rol de empleado.
+  // Un empleado sin rol asignado ("Todas las categorías") ve todas las
+  // categorías existentes, para no dejar a nadie sin acceso por accidente.
+  const ROLE_CATEGORIES = {
+    "Mucama": ["Productos de limpieza","Bebidas"],
+    "Mantenimiento": ["Productos de limpieza","Bebidas","Mantenimiento"],
+    "Recepción": ["Productos de limpieza","Bebidas"]
+  };
+  const ROLES = Object.keys(ROLE_CATEGORIES);
+
   let db = null;
   let employees = [];
   let products = [];
@@ -218,6 +231,14 @@
     const d = new Date(ts);
     return d.toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit"}) + " " +
            d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
+  }
+
+  // Devuelve las categorías visibles para un empleado según su rol.
+  // Si no tiene rol asignado (o el rol no está en ROLE_CATEGORIES),
+  // ve todas las categorías existentes.
+  function getAllowedCategories(role){
+    if(!role || !ROLE_CATEGORIES[role]) return categories;
+    return categories.filter(c => ROLE_CATEGORIES[role].includes(c));
   }
 
   // Muestra una notificación flotante (toast) en la parte inferior de la pantalla
@@ -314,9 +335,10 @@
       rows.forEach(r=>{
         const name = String(r["Nombre"]||"").trim();
         const pin = String(r["PIN"]||"").trim();
+        const role = String(r["Rol"]||"").trim();
         if(!name || existingNames.has(name)) return;
         existingNames.add(name);
-        toAdd.push({name, pin});
+        toAdd.push({name, pin, role});
       });
       for(let i=0;i<toAdd.length;i+=400){
         const chunk = toAdd.slice(i, i+400);
@@ -451,7 +473,7 @@
         const batch = db.batch();
         DEFAULT_EMPLOYEES.forEach(([name, pin]) => {
           const ref = db.collection("employees").doc();
-          batch.set(ref, { name, pin });
+          batch.set(ref, { name, pin, role: "" });
         });
         await batch.commit();
         const refreshed = await db.collection("employees").get();
@@ -499,7 +521,7 @@
       if(session && session.type === "user"){
         const emp = employees.find(e => e.id === session.empId);
         if(emp){
-          currentUser = { id: emp.id, name: emp.name };
+          currentUser = { id: emp.id, name: emp.name, role: emp.role || "" };
           view = "form";
         }else{
           clearSession();
@@ -523,9 +545,9 @@
       adminPin: config.adminPin, stock: config.stock, categories
     });
   }
-  async function addEmployee(name, pin){
-    const ref = await db.collection("employees").add({ name, pin });
-    employees.push({ id: ref.id, name, pin });
+  async function addEmployee(name, pin, role){
+    const ref = await db.collection("employees").add({ name, pin, role: role || "" });
+    employees.push({ id: ref.id, name, pin, role: role || "" });
   }
   async function updateEmployee(id, data){
     await db.collection("employees").doc(id).update(data);
@@ -595,7 +617,7 @@
         msg.innerHTML = `<div class="msg error">PIN incorrecto. Volvé a intentar o pedile a un administrador que revise tu PIN.</div>`;
         return;
       }
-      currentUser = { id: emp.id, name: emp.name };
+      currentUser = { id: emp.id, name: emp.name, role: emp.role || "" };
       view = "form";
       saveSession({ type:"user", empId: emp.id });
       render();
@@ -607,7 +629,25 @@
   // FORM (registrar retiro)
   // =======================================================================
   function renderForm(){
-    if(!selectedCategory || !categories.includes(selectedCategory)) selectedCategory = categories[0];
+    const allowedCats = getAllowedCategories(currentUser.role);
+    if(!allowedCats.length){
+      app.innerHTML = `
+        <div class="topbar">
+          <div class="row">
+            <div><h1>Hola, ${esc(currentUser.name)}</h1><p class="sub">Registrar retiro de stock</p></div>
+            <button class="link" id="logoutBtn">Cerrar sesión</button>
+          </div>
+        </div>
+        <section>
+          <div class="card">
+            <div class="msg info">Todavía no tenés categorías asignadas. Pedile a un administrador que te asigne un rol en la sección Empleados.</div>
+          </div>
+        </section>
+      `;
+      document.getElementById("logoutBtn").onclick = () => { currentUser=null; view="login"; clearSession(); render(); };
+      return;
+    }
+    if(!selectedCategory || !allowedCats.includes(selectedCategory)) selectedCategory = allowedCats[0];
     const misMovs = movements
       .filter(m => m.employeeId === currentUser.id)
       .sort((a,b)=>b.ts-a.ts)
@@ -627,7 +667,7 @@
           <div id="formMsg"></div>
           <label>Categoría</label>
           <div class="tabs" id="catTabs">
-            ${categories.map(c=>`<button type="button" data-cat="${esc(c)}" class="${c===selectedCategory?"active":""}">${esc(c)}</button>`).join("")}
+            ${allowedCats.map(c=>`<button type="button" data-cat="${esc(c)}" class="${c===selectedCategory?"active":""}">${esc(c)}</button>`).join("")}
           </div>
           <label>Producto</label>
           <select id="prodSelect">
@@ -762,8 +802,8 @@
       });
       products.filter(p=>!categories.includes(p.category)).forEach(p => prodAoa.push([p.category||"", p.name, p.medida]));
 
-      const empAoa = [["Nombre","PIN"]];
-      employees.forEach(e => empAoa.push([e.name, e.pin]));
+      const empAoa = [["Nombre","PIN","Rol"]];
+      employees.forEach(e => empAoa.push([e.name, e.pin, e.role || ""]));
 
       exportWorkbook([
         {name:"Movimientos", rows: movAoa},
@@ -1199,6 +1239,9 @@
         <h2>Empleados y PIN</h2>
         <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
           Cada empleado necesita su nombre y un PIN propio para poder registrar movimientos.
+          El rol determina qué categorías de productos puede ver: Mucama y Recepción acceden a
+          Productos de limpieza y Bebidas; Mantenimiento accede además a Mantenimiento. "Todas las
+          categorías" deja al empleado sin restricción.
         </p>
         <div id="empList"></div>
         <button class="btn btn-secondary" id="addEmpBtn" style="margin-top:8px;">+ Agregar empleado</button>
@@ -1214,6 +1257,10 @@
         <div class="emp-row">
           <input type="text" value="${esc(e.name)}" data-idx="${i}" class="empName">
           <input type="tel" inputmode="numeric" maxlength="4" value="${esc(e.pin)}" data-idx="${i}" class="empPin">
+          <select data-idx="${i}" class="empRole">
+            <option value="" ${!e.role?"selected":""}>Todas las categorías</option>
+            ${ROLES.map(r=>`<option value="${esc(r)}" ${e.role===r?"selected":""}>${esc(r)}</option>`).join("")}
+          </select>
           <button class="small-btn" data-idx="${i}" data-action="del">Quitar</button>
         </div>
       `).join("");
@@ -1224,6 +1271,9 @@
         restrictPinInput(inp);
         inp.addEventListener("change", async () => { const e=employees[inp.dataset.idx]; e.pin=inp.value.trim(); await updateEmployee(e.id,{pin:e.pin}); });
       });
+      Array.from(document.querySelectorAll(".empRole")).forEach(sel=>{
+        sel.onchange = async () => { const e=employees[sel.dataset.idx]; e.role=sel.value; await updateEmployee(e.id,{role:e.role}); };
+      });
       Array.from(document.querySelectorAll("[data-action='del']")).forEach(btn=>{
         btn.onclick = async () => { await deleteEmployee(employees[btn.dataset.idx].id); drawEmpList(); };
       });
@@ -1232,7 +1282,7 @@
 
     document.getElementById("addEmpBtn").onclick = async () => {
       const n = employees.length + 1;
-      await addEmployee("Nuevo empleado "+n, String(2100+n));
+      await addEmployee("Nuevo empleado "+n, String(2100+n), "");
       drawEmpList();
     };
 
