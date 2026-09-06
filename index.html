@@ -685,7 +685,7 @@
           <div id="loginMsg"></div>
           <label>Tu nombre</label>
           <select id="empSelect">
-            ${employees.map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join("")}
+            ${employees.slice().sort((a,b)=>a.name.localeCompare(b.name,'es',{sensitivity:'base'})).map(e=>`<option value="${e.id}">${esc(e.name)}</option>`).join("")}
           </select>
           <label>Tu PIN personal</label>
           <input type="tel" inputmode="numeric" maxlength="4" id="pinInput" placeholder="••••">
