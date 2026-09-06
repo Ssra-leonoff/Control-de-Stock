@@ -246,6 +246,7 @@
   let categories = [];
   let config = { adminPin: "1982", stock: {} };
   let movements = [];
+  let deletedStats = {};
   let currentUser = null;
   let view = "login";
   let selectedCategory = null;
@@ -452,6 +453,38 @@
     el.oninput = () => { el.value = el.value.replace(/\D/g, "").slice(0, 4); };
   }
 
+  // Lleva el conteo de intentos fallidos de PIN por empleado y bloquea
+  // el usuario tras 5 intentos incorrectos seguidos. Persiste en el
+  // navegador para que el bloqueo no se pierda si se recarga la página.
+  const LOGIN_ATTEMPTS_KEY = "controlStockLoginAttempts";
+  const MAX_LOGIN_ATTEMPTS = 5;
+  function readLoginAttempts(){
+    try{ return JSON.parse(localStorage.getItem(LOGIN_ATTEMPTS_KEY)) || {}; }catch(e){ return {}; }
+  }
+  function saveLoginAttempts(data){
+    try{ localStorage.setItem(LOGIN_ATTEMPTS_KEY, JSON.stringify(data)); }catch(e){}
+  }
+  function isEmployeeLocked(empId){
+    const attempts = readLoginAttempts();
+    return !!(attempts[empId] && attempts[empId].locked);
+  }
+  function registerFailedAttempt(empId){
+    const attempts = readLoginAttempts();
+    const current = attempts[empId] || { count:0, locked:false };
+    current.count += 1;
+    if(current.count >= MAX_LOGIN_ATTEMPTS) current.locked = true;
+    attempts[empId] = current;
+    saveLoginAttempts(attempts);
+    return current;
+  }
+  function clearFailedAttempts(empId){
+    const attempts = readLoginAttempts();
+    if(attempts[empId]){ delete attempts[empId]; saveLoginAttempts(attempts); }
+  }
+  function unlockEmployee(empId){
+    clearFailedAttempts(empId);
+  }
+
   // =======================================================================
   // SETUP SCREEN si falta configurar Firebase
   // =======================================================================
@@ -481,11 +514,12 @@
       // Se piden config, empleados, productos y movimientos todos juntos
       // (en paralelo) en lugar de uno por uno, para que la carga inicial
       // no espere una respuesta tras otra.
-      const [configSnap, empSnap, prodSnap, movSnap] = await Promise.all([
+      const [configSnap, empSnap, prodSnap, movSnap, delStatsSnap] = await Promise.all([
         configRef.get(),
         db.collection("employees").get(),
         db.collection("products").get(),
-        db.collection("movements").get()
+        db.collection("movements").get(),
+        db.collection("deletedMovStats").get()
       ]);
 
       if(!configSnap.exists){
@@ -542,6 +576,8 @@
       }
 
       movements = movSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      deletedStats = {};
+      delStatsSnap.docs.forEach(d => { deletedStats[d.id] = d.data(); });
 
       // Si había una sesión guardada en este navegador, se restaura
       // en vez de mostrar la pantalla de login. La de administrador
@@ -600,9 +636,20 @@
     const ref = await db.collection("movements").add(mov);
     movements.push({ id: ref.id, ...mov });
   }
+  async function registerDeletedMovement(mov){
+    const key = mov.employeeId || "sin_empleado";
+    const name = mov.employeeName || "Desconocido";
+    await db.collection("deletedMovStats").doc(key).set({
+      employeeName: name,
+      count: firebase.firestore.FieldValue.increment(1)
+    }, { merge: true });
+    deletedStats[key] = { employeeName: name, count: (deletedStats[key]?.count || 0) + 1 };
+  }
   async function deleteMovement(id){
+    const mov = movements.find(m => m.id === id);
     await db.collection("movements").doc(id).delete();
     movements = movements.filter(m => m.id !== id);
+    if(mov) await registerDeletedMovement(mov);
   }
   async function deleteAllMovements(){
     const all = movements.slice();
@@ -613,6 +660,17 @@
       await batch.commit();
     }
     movements = [];
+    // "Borrar todos" no cuenta como borrado individual: se resetea por
+    // completo el contador de movimientos borrados por empleado.
+    const statsSnap = await db.collection("deletedMovStats").get();
+    const statsDocs = statsSnap.docs.slice();
+    for(let i=0;i<statsDocs.length;i+=400){
+      const chunk = statsDocs.slice(i, i+400);
+      const batch = db.batch();
+      chunk.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+    }
+    deletedStats = {};
   }
 
   // =======================================================================
@@ -642,10 +700,25 @@
       const pin = document.getElementById("pinInput").value.trim();
       const emp = employees.find(e=>e.id===empId);
       const msg = document.getElementById("loginMsg");
-      if(!emp || pin === "" || pin !== emp.pin){
-        msg.innerHTML = `<div class="msg error">PIN incorrecto. Volvé a intentar o pedile a un administrador que revise tu PIN.</div>`;
+      if(emp && isEmployeeLocked(emp.id)){
+        msg.innerHTML = `<div class="msg error">Usuario bloqueado por 5 intentos fallidos seguidos. Pedile a un administrador que lo desbloquee.</div>`;
         return;
       }
+      if(!emp || pin === "" || pin !== emp.pin){
+        if(emp){
+          const attempt = registerFailedAttempt(emp.id);
+          if(attempt.locked){
+            msg.innerHTML = `<div class="msg error">Usuario bloqueado por 5 intentos fallidos seguidos. Pedile a un administrador que lo desbloquee.</div>`;
+          } else {
+            const restantes = MAX_LOGIN_ATTEMPTS - attempt.count;
+            msg.innerHTML = `<div class="msg error">PIN incorrecto. Te queda${restantes===1?"":"n"} ${restantes} intento${restantes===1?"":"s"} antes de bloquear el usuario.</div>`;
+          }
+        } else {
+          msg.innerHTML = `<div class="msg error">PIN incorrecto. Volvé a intentar o pedile a un administrador que revise tu PIN.</div>`;
+        }
+        return;
+      }
+      clearFailedAttempts(emp.id);
       currentUser = { id: emp.id, name: emp.name, role: emp.role || "" };
       view = "form";
       saveSession({ type:"user", empId: emp.id });
@@ -1092,6 +1165,13 @@
         <h2>Retiros por categoría</h2>
         <div id="eTopCategories"></div>
       </div>
+      <div class="card">
+        <h2>Movimientos borrados por empleado</h2>
+        <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
+          Cantidad total de movimientos eliminados que pertenecían a cada empleado. No se ve afectado por el filtro de fechas de arriba.
+        </p>
+        <div id="eDeletedByEmployee"></div>
+      </div>
     `;
 
     function getFiltered(){
@@ -1115,13 +1195,14 @@
       return Array.from(map.values());
     }
 
-    function drawBars(containerId, entries){
+    function drawBars(containerId, entries, unit){
+      unit = unit || "retiro";
       const container = document.getElementById(containerId);
       if(!entries.length){ container.innerHTML = `<div class="empty">Sin datos para este filtro.</div>`; return; }
       const max = Math.max(...entries.map(e=>e.total));
       container.innerHTML = entries.map(e => `
         <div class="bar-row">
-          <div class="bar-label"><span>${esc(e.key)}</span><span><strong>${e.total}</strong> (${e.count} retiro${e.count===1?"":"s"})</span></div>
+          <div class="bar-label"><span>${esc(e.key)}</span><span><strong>${e.total}</strong> ${e.count===e.total?"":`(${e.count} ${unit}${e.count===1?"":"s"})`}</span></div>
           <div class="bar-track"><div class="bar-fill" style="width:${max ? (e.total/max*100) : 0}%;"></div></div>
         </div>
       `).join("");
@@ -1149,6 +1230,11 @@
 
       const byCategory = groupSum(rows, m=>m.category||"Sin categoría").sort((a,b)=>b.total-a.total);
       drawBars("eTopCategories", byCategory);
+
+      const byDeleted = Object.values(deletedStats)
+        .map(v=>({key: v.employeeName || "Desconocido", total: v.count || 0, count: v.count || 0}))
+        .sort((a,b)=>b.total-a.total);
+      drawBars("eDeletedByEmployee", byDeleted);
     }
 
     document.getElementById("eDesde").onchange = draw;
@@ -1288,11 +1374,17 @@
         <div class="emp-row">
           <input type="text" value="${esc(e.name)}" data-idx="${i}" class="empName">
           <input type="tel" inputmode="numeric" maxlength="4" value="${esc(e.pin)}" data-idx="${i}" class="empPin">
+          <button class="small-btn" data-idx="${i}" data-action="del">Quitar</button>
           <select data-idx="${i}" class="empRole">
             <option value="" ${!e.role?"selected":""}>Todas las categorías</option>
             ${ROLES.map(r=>`<option value="${esc(r)}" ${e.role===r?"selected":""}>${esc(r)}</option>`).join("")}
           </select>
-          <button class="small-btn" data-idx="${i}" data-action="del">Quitar</button>
+          ${isEmployeeLocked(e.id) ? `
+            <div class="msg error" style="order:5;flex:1 1 100%;display:flex;justify-content:space-between;align-items:center;gap:8px;margin:2px 0 0;">
+              <span>🔒 Bloqueado por intentos fallidos</span>
+              <button class="small-btn" data-idx="${i}" data-action="unlock" style="flex:0 0 auto;">Desbloquear</button>
+            </div>
+          ` : ""}
         </div>
       `).join("");
       Array.from(document.querySelectorAll(".empName")).forEach(inp=>{
@@ -1320,6 +1412,14 @@
       });
       Array.from(document.querySelectorAll(".empRole")).forEach(sel=>{
         sel.onchange = async () => { const e=employees[sel.dataset.idx]; e.role=sel.value; await updateEmployee(e.id,{role:e.role}); };
+      });
+      Array.from(document.querySelectorAll("[data-action='unlock']")).forEach(btn=>{
+        btn.onclick = () => {
+          const e = employees[btn.dataset.idx];
+          unlockEmployee(e.id);
+          showToast(`${e.name} fue desbloqueado`, "ok");
+          drawEmpList();
+        };
       });
       Array.from(document.querySelectorAll("[data-action='del']")).forEach(btn=>{
         btn.onclick = async () => { await deleteEmployee(employees[btn.dataset.idx].id); drawEmpList(); };
