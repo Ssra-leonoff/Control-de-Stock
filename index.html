@@ -1857,6 +1857,54 @@
   }
 
   // =======================================================================
+  // BOTÓN "ATRÁS" DEL CELULAR
+  // En vez de cerrar el navegador/app: para un empleado (view "form"), el
+  // atrás lo manda directo a la pantalla de elegir categoría, sea cual sea
+  // el paso en el que esté. Para el administrador, lo manda al menú
+  // principal (login). Una vez en esa pantalla "raíz", si vuelve a tocar
+  // atrás (dentro de los 2 segundos) recién ahí se deja salir.
+  // =======================================================================
+  let backExitArmed = false;
+  let backExitTimer = null;
+
+  function pushHistoryGuard(){
+    history.pushState({ appGuard: true }, "", location.href);
+  }
+
+  function isRootScreen(){
+    return view === "login" || (view === "form" && formStep === "categoria");
+  }
+
+  function backOneStep(){
+    if(view === "form"){
+      formStep = "categoria";
+      render();
+    } else if(view === "admin-login" || view === "admin"){
+      view = "login";
+      render();
+    }
+  }
+
+  window.addEventListener("popstate", function(){
+    if(!isRootScreen()){
+      backOneStep();
+      backExitArmed = false;
+      pushHistoryGuard();
+    } else if(backExitArmed){
+      // Segunda vez seguida ya en la pantalla raíz: se deja salir,
+      // no se vuelve a bloquear el historial.
+    } else {
+      backExitArmed = true;
+      showToast("Tocá atrás de nuevo para salir", "info");
+      pushHistoryGuard();
+      clearTimeout(backExitTimer);
+      backExitTimer = setTimeout(() => { backExitArmed = false; }, 2000);
+    }
+  });
+
+  pushHistoryGuard();
+
+  // =======================================================================
   // INICIO
   // =======================================================================
   if(NOT_CONFIGURED){
