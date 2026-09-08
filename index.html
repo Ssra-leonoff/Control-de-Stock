@@ -176,6 +176,10 @@
   .confirm-giant:active{transform:scale(.97);}
   .confirm-giant:disabled{cursor:default;}
   .confirm-giant.done{background:linear-gradient(135deg,#0F9D75,#12BE8F);}
+
+  .area-opts{display:flex;gap:8px;margin:0 0 14px;}
+  .area-opt-btn{flex:1;padding:12px 6px;border-radius:var(--radius-sm);border:1.5px solid var(--line);background:var(--bg);color:var(--ink-soft);font-size:12.5px;font-weight:700;letter-spacing:.2px;cursor:pointer;font-family:inherit;transition:background .15s ease, border-color .15s ease, color .15s ease;}
+  .area-opt-btn.active{background:var(--grad-btn);border-color:transparent;color:#fff;box-shadow:0 4px 12px rgba(30,79,176,.28);}
   .success-banner{background:var(--green-soft);color:var(--green);font-family:"Poppins",sans-serif;font-weight:800;font-size:20px;text-align:center;padding:22px 16px;border-radius:22px;margin:4px 20px 18px;box-shadow:var(--shadow-sm);}
 
   .toast{
@@ -315,6 +319,7 @@
   let selectedProductId = null;
   let qtyValue = 1;
   let areaValue = "";
+  let areaSelected = ""; // "Venta" | "Dirigentes" | "Otro" | "" — solo se usa para la categoría Bebidas
   let lastMovSuccess = false;
 
   // Colores bien distintos entre sí para que cada categoría sea reconocible
@@ -856,6 +861,7 @@
       selectedProductId = null;
       qtyValue = 1;
       areaValue = "";
+      areaSelected = "";
       saveSession({ type:"user", empId: emp.id });
       render();
     };
@@ -871,6 +877,7 @@
     selectedProductId = null;
     qtyValue = 1;
     areaValue = "";
+    areaSelected = "";
     clearSession();
     render();
   }
@@ -982,6 +989,7 @@
         selectedProductId = b.dataset.id;
         qtyValue = 1;
         areaValue = "";
+        areaSelected = "";
         formStep = "cantidad";
         render();
       };
@@ -993,6 +1001,19 @@
   function renderFormCantidad(){
     const prod = products.find(p=>p.id===selectedProductId);
     if(!prod){ formStep = "categoria"; render(); return; }
+    const esBebidas = prod.category === "Bebidas";
+    const areaBlockHTML = esBebidas ? `
+          <label style="margin-top:6px;">Área / destino</label>
+          <div class="area-opts" id="areaOpts">
+            <button type="button" class="area-opt-btn${areaSelected==='Venta'?' active':''}" data-val="Venta">VENTA</button>
+            <button type="button" class="area-opt-btn${areaSelected==='Dirigentes'?' active':''}" data-val="Dirigentes">DIRIGENTES</button>
+            <button type="button" class="area-opt-btn${areaSelected==='Otro'?' active':''}" data-val="Otro">OTRO</button>
+          </div>
+          ${areaSelected==='Otro' ? `<input type="text" id="areaInput" placeholder="Especificá el área / destino..." value="${esc(areaValue)}">` : ``}
+    ` : `
+          <label style="margin-top:6px;">Área / destino (opcional)</label>
+          <input type="text" id="areaInput" placeholder="Ej: Habitaciones, Cocina..." value="${esc(areaValue)}">
+    `;
     app.innerHTML = `
       ${topbarWizard("¿Cuántos retirás?")}
       <section>
@@ -1004,8 +1025,7 @@
             <div class="qty-display" id="qtyDisplay">${qtyValue}</div>
             <button type="button" class="qty-btn" id="qtyPlus">+</button>
           </div>
-          <label style="margin-top:6px;">Área / destino (opcional)</label>
-          <input type="text" id="areaInput" placeholder="Ej: Habitaciones, Cocina..." value="${esc(areaValue)}">
+          ${areaBlockHTML}
         </div>
         <button type="button" class="confirm-giant" id="confirmBtn">REGISTRAR MOVIMIENTO</button>
         <div id="confirmMsg" style="padding:0 20px;"></div>
@@ -1018,12 +1038,35 @@
     document.getElementById("qtyPlus").onclick = () => { qtyValue++; display.textContent = qtyValue; minusBtn.disabled = qtyValue<=1; };
     minusBtn.disabled = qtyValue<=1;
     minusBtn.onclick = () => { if(qtyValue>1){ qtyValue--; display.textContent = qtyValue; minusBtn.disabled = qtyValue<=1; } };
+
+    if(esBebidas){
+      Array.from(document.querySelectorAll(".area-opt-btn")).forEach(b=>{
+        b.onclick = () => {
+          areaSelected = b.dataset.val;
+          if(areaSelected !== "Otro"){ areaValue = areaSelected; }
+          else { areaValue = ""; }
+          render();
+        };
+      });
+    }
     const areaInput = document.getElementById("areaInput");
 
     document.getElementById("confirmBtn").onclick = async () => {
       const btn = document.getElementById("confirmBtn");
       const msg = document.getElementById("confirmMsg");
-      areaValue = areaInput.value.trim();
+      if(esBebidas){
+        if(!areaSelected){
+          msg.innerHTML = `<div class="msg error">Elegí una opción de área / destino.</div>`;
+          return;
+        }
+        areaValue = areaSelected === "Otro" ? (areaInput ? areaInput.value.trim() : "") : areaSelected;
+        if(areaSelected === "Otro" && !areaValue){
+          msg.innerHTML = `<div class="msg error">Escribí el área / destino.</div>`;
+          return;
+        }
+      } else {
+        areaValue = areaInput.value.trim();
+      }
       const mov = {
         employeeId: currentUser.id, employeeName: currentUser.name,
         product: prod.name, category: prod.category,
@@ -1046,6 +1089,7 @@
         selectedProductId = null;
         qtyValue = 1;
         areaValue = "";
+        areaSelected = "";
         lastMovSuccess = true;
         formStep = "lista";
         render();
