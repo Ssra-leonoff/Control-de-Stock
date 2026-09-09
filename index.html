@@ -328,6 +328,13 @@
   let areaSelected = ""; // "Venta" | "Dirigentes" | "Otro" | "" — solo se usa para la categoría Bebidas
   let lastMovSuccess = false;
 
+  // Manejo del botón/gesto "atrás" del celular dentro del asistente de
+  // retiro: si estás avanzado (producto/cantidad/lista), atrás te lleva
+  // directo a la selección de categoría. Si ya estás en la selección de
+  // categoría, atrás muestra un aviso y hay que tocarlo de nuevo para salir.
+  let backExitArmed = false;
+  let backExitTimer = null;
+
   // Colores bien distintos entre sí para que cada categoría sea reconocible
   // de un vistazo (pensado para gente mayor: contraste alto, nada de tonos parecidos).
   const CATEGORY_COLORS = [
@@ -1861,6 +1868,41 @@
     // cortado arriba.
     window.scrollTo(0, 0);
   }
+
+  // =======================================================================
+  // BOTÓN/GESTO "ATRÁS" DEL CELULAR
+  // =======================================================================
+  // Se mantiene siempre una única entrada "guardia" en el historial del
+  // navegador. Cada vez que el usuario toca atrás, esa entrada se consume
+  // y dispara "popstate" acá abajo, en vez de sacarlo de la página:
+  //  - Si estaba avanzado en el asistente de retiro (producto/cantidad/
+  //    lista de movimientos), lo manda directo a elegir categoría.
+  //  - Si ya estaba en la pantalla raíz (categoría, login, admin, etc.),
+  //    la primera vez avisa "Tocá atrás de nuevo para salir"; si lo toca
+  //    de nuevo enseguida, ahí sí se deja salir de verdad (no se vuelve a
+  //    poner la entrada guardia).
+  function pushHistoryGuard(){
+    history.pushState({ appGuard: true }, "", location.href);
+  }
+  window.addEventListener("popstate", function(){
+    if(view === "form" && (formStep === "producto" || formStep === "cantidad" || formStep === "lista")){
+      formStep = "categoria";
+      backExitArmed = false;
+      clearTimeout(backExitTimer);
+      pushHistoryGuard();
+      render();
+    } else if(backExitArmed){
+      // Segunda vez seguida en la pantalla raíz: se deja salir,
+      // no se vuelve a interceptar el historial.
+    } else {
+      backExitArmed = true;
+      showToast("Tocá atrás de nuevo para salir", "info");
+      pushHistoryGuard();
+      clearTimeout(backExitTimer);
+      backExitTimer = setTimeout(() => { backExitArmed = false; }, 2000);
+    }
+  });
+  pushHistoryGuard();
 
   // =======================================================================
   // INICIO
