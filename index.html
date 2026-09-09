@@ -38,7 +38,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- La librería de Excel (xlsx) ya no se carga acá: pesa bastante y solo
+     hace falta para exportar/importar, así que se carga bajo demanda
+     (ver ensureXLSXLoaded) para no frenar el arranque de la app. -->
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -134,6 +136,11 @@
   .prod-row{display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;}
   .prod-row input[type=text]{flex:2;min-width:100px;margin-bottom:0;}
   .prod-row select{flex:1;min-width:110px;margin-bottom:0;}
+  #prodList .prod-row{padding:8px 0;border-bottom:1px solid var(--line);margin-bottom:0;}
+  #prodList .prod-row:last-child{border-bottom:none;}
+  #prodList .prod-row input[type=text], #prodList .prod-row select{font-size:12.5px;padding:8px 9px;margin-bottom:0;}
+  #prodList .prod-row .small-btn{font-size:11px;padding:7px 10px;}
+  #prodFilterCat{margin-bottom:14px;}
 
   .tabs{display:flex;gap:6px;margin-bottom:18px;flex-wrap:wrap;background:var(--bg-soft);padding:6px;border-radius:16px;}
   .tabs button{flex:1;padding:10px 6px;border-radius:12px;border:none;background:transparent;font-size:12px;font-weight:700;color:var(--ink-soft);cursor:pointer;min-width:80px;font-family:inherit;transition:background .18s ease, color .18s ease, box-shadow .18s ease;}
@@ -146,6 +153,40 @@
   }
 
   .btn-primary.btn-success{background:linear-gradient(135deg,#0F9D75,#12BE8F);transition:background .2s ease;}
+
+  /* ===== Asistente de retiro paso a paso (pantallas grandes, para adultos mayores) ===== */
+  .wizard-back{display:block;background:none;border:none;color:var(--violet-deep);font-size:16px;font-weight:700;cursor:pointer;padding:12px 4px;margin:2px 20px 2px;}
+  .wizard-back:active{opacity:.6;}
+
+  .cat-cards{display:flex;flex-direction:column;gap:16px;padding:22px 20px;}
+  .cat-card{border:none;border-radius:24px;padding:28px 22px;display:flex;align-items:center;gap:18px;font-family:"Poppins",sans-serif;font-size:25px;font-weight:800;box-shadow:var(--shadow-md);cursor:pointer;transition:transform .12s ease;text-align:left;line-height:1.15;}
+  .cat-card:active{transform:scale(.96);}
+  .cat-card-icon{font-size:40px;line-height:1;flex:0 0 auto;}
+  .cat-card-label{flex:1;}
+
+  .prod-list{display:flex;flex-direction:column;gap:14px;padding:6px 20px 22px;}
+  .prod-card{background:#fff;border:2px solid var(--line);border-radius:20px;padding:22px;display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:20px;font-weight:700;color:var(--ink);box-shadow:var(--shadow-sm);cursor:pointer;text-align:left;font-family:inherit;}
+  .prod-card:active{transform:scale(.97);background:var(--bg-soft);}
+  .prod-card-medida{font-size:14px;font-weight:600;color:var(--ink-soft);white-space:nowrap;}
+
+  .qty-wizard{display:flex;align-items:center;justify-content:center;gap:26px;margin:22px 0 8px;}
+  .qty-btn{width:68px;height:68px;border-radius:50%;border:none;background:var(--grad-btn);color:#fff;font-size:34px;font-weight:800;cursor:pointer;box-shadow:var(--shadow-btn);font-family:inherit;line-height:1;}
+  .qty-btn:active{transform:scale(.92);}
+  .qty-btn:disabled{opacity:.4;}
+  .qty-display{min-width:90px;text-align:center;font-size:48px;font-weight:800;color:var(--violet-deep);font-family:"Poppins",sans-serif;}
+
+  .confirm-summary{text-align:center;padding-top:6px;}
+  .confirm-summary .prodName{font-family:"Poppins",sans-serif;font-size:21px;font-weight:800;color:var(--ink);margin:0 0 6px;}
+  .confirm-summary .metaLine{font-size:15px;color:var(--ink-soft);margin:0;}
+  .confirm-giant{display:block;width:calc(100% - 40px);margin:18px 20px 6px;padding:36px 20px;border-radius:26px;border:none;background:var(--grad-btn);color:#fff;font-family:"Poppins",sans-serif;font-size:22px;font-weight:800;letter-spacing:.4px;box-shadow:var(--shadow-btn);cursor:pointer;transition:background .25s ease, transform .12s ease;}
+  .confirm-giant:active{transform:scale(.97);}
+  .confirm-giant:disabled{cursor:default;}
+  .confirm-giant.done{background:linear-gradient(135deg,#0F9D75,#12BE8F);}
+
+  .area-opts{display:flex;gap:8px;margin:0 0 14px;}
+  .area-opt-btn{flex:1;padding:12px 6px;border-radius:var(--radius-sm);border:1.5px solid var(--line);background:var(--bg);color:var(--ink-soft);font-size:12.5px;font-weight:700;letter-spacing:.2px;cursor:pointer;font-family:inherit;transition:background .15s ease, border-color .15s ease, color .15s ease;}
+  .area-opt-btn.active{background:var(--grad-btn);border-color:transparent;color:#fff;box-shadow:0 4px 12px rgba(30,79,176,.28);}
+  .success-banner{background:var(--green-soft);color:var(--green);font-family:"Poppins",sans-serif;font-weight:800;font-size:20px;text-align:center;padding:22px 16px;border-radius:22px;margin:4px 20px 18px;box-shadow:var(--shadow-sm);}
 
   .toast{
     position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(16px);
@@ -175,8 +216,11 @@
   .footer-link button{background:none;border:none;color:var(--violet-deep);text-decoration:none;font-weight:600;cursor:pointer;font-size:12.5px;}
   .footer-link button:hover{text-decoration:underline;}
   .empty{color:var(--ink-soft);font-size:13px;text-align:center;padding:20px 0;}
-  .add-cat-row{display:flex;gap:8px;margin-top:10px;}
+  .add-cat-row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
   .add-cat-row input{margin-bottom:0;flex:1;}
+  .cat-role-checks{display:flex;gap:10px;flex-wrap:wrap;flex:1 1 100%;margin:2px 0 2px;}
+  .cat-role-check{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:var(--ink-soft);}
+  .cat-role-check input{width:auto;margin:0;}
 </style>
 </head>
 <body>
@@ -198,7 +242,11 @@
 
   const NOT_CONFIGURED = firebaseConfig.apiKey === "TU_API_KEY";
 
-  const DEFAULT_CATEGORIES = ["Productos de limpieza","Bebidas","Mantenimiento"];
+  const DEFAULT_CATEGORIES = [
+    {name:"Productos de limpieza", roles:[]},
+    {name:"Bebidas", roles:[]},
+    {name:"Mantenimiento", roles:["Mantenimiento"]}
+  ];
 
   const DEFAULT_CLEANING = [
     ["Alcohol Gel","5L"],["Alcohol líquido","5L"],["Blem aerosol","360ml"],
@@ -236,15 +284,26 @@
     ["Gonzalo","2013"],["Jonn","2014"]
   ];
 
-  // Categorías de productos a las que puede acceder cada rol de empleado.
-  // Un empleado sin rol asignado ("Todas las categorías") ve todas las
-  // categorías existentes, para no dejar a nadie sin acceso por accidente.
-  const ROLE_CATEGORIES = {
+  // Roles de empleado disponibles. Qué categorías ve cada rol ahora se
+  // define por categoría (ver categories[].roles), no acá: cada categoría
+  // guarda la lista de roles que pueden verla. Si esa lista viene vacía,
+  // la categoría es visible para todos los roles.
+  const ROLES = ["Mucama","Mantenimiento","Recepción"];
+
+  // Mapa legado, solo se usa una vez para migrar datos viejos donde
+  // "categories" era un simple array de nombres (sin roles asociados).
+  const LEGACY_ROLE_CATEGORIES = {
     "Mucama": ["Productos de limpieza","Bebidas"],
     "Mantenimiento": ["Productos de limpieza","Bebidas","Mantenimiento"],
     "Recepción": ["Productos de limpieza","Bebidas"]
   };
-  const ROLES = Object.keys(ROLE_CATEGORIES);
+  // Convierte una categoría vieja (string) al nuevo formato {name, roles}.
+  function migrateLegacyCategory(name){
+    const roles = ROLES.filter(r => (LEGACY_ROLE_CATEGORIES[r]||[]).includes(name));
+    // Si no matcheaba ningún rol conocido (categoría personalizada vieja),
+    // la dejamos visible para todos en vez de ocultarla por accidente.
+    return { name, roles: roles.length === ROLES.length ? [] : roles };
+  }
 
   let db = null;
   let employees = [];
@@ -253,10 +312,47 @@
   let config = { adminPin: "1982", stock: {} };
   let movements = [];
   let deletedStats = {};
+  let deletedStatsLoaded = false; // recién se trae de Firestore cuando hace falta (pestaña Estadísticas)
   let currentUser = null;
   let view = "login";
   let selectedCategory = null;
   let adminTab = "movimientos";
+  let adminProdFilterCat = "";
+  let adminProdSortMode = "";
+
+  // Estado del asistente de retiro paso a paso (categoria -> producto -> cantidad -> lista)
+  let formStep = "categoria";
+  let selectedProductId = null;
+  let qtyValue = 1;
+  let areaValue = "";
+  let areaSelected = ""; // "Venta" | "Dirigentes" | "Otro" | "" — solo se usa para la categoría Bebidas
+  let lastMovSuccess = false;
+
+  // Colores bien distintos entre sí para que cada categoría sea reconocible
+  // de un vistazo (pensado para gente mayor: contraste alto, nada de tonos parecidos).
+  const CATEGORY_COLORS = [
+    {bg:"#1E4FB0", text:"#fff"},
+    {bg:"#0F9D75", text:"#fff"},
+    {bg:"#C6631B", text:"#fff"},
+    {bg:"#B3273F", text:"#fff"},
+    {bg:"#7A3FC2", text:"#fff"},
+    {bg:"#0E7C86", text:"#fff"},
+    {bg:"#946200", text:"#fff"},
+  ];
+  function getCategoryColor(cat){
+    let idx = categories.findIndex(c=>c.name===cat);
+    if(idx < 0) idx = 0;
+    return CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
+  }
+  function getCategoryIcon(cat){
+    const c = (cat||"").toLowerCase();
+    if(c.includes("limpieza")) return "🧴";
+    if(c.includes("bebida")) return "🥤";
+    if(c.includes("mantenimiento")) return "🔧";
+    if(c.includes("aliment") || c.includes("comida")) return "🍽️";
+    if(c.includes("papel") || c.includes("higien")) return "🧻";
+    return "📦";
+  }
 
   const app = document.getElementById("app");
 
@@ -269,12 +365,13 @@
            d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
   }
 
-  // Devuelve las categorías visibles para un empleado según su rol.
-  // Si no tiene rol asignado (o el rol no está en ROLE_CATEGORIES),
-  // ve todas las categorías existentes.
+  // Devuelve las categorías (nombres) visibles para un empleado según su rol.
+  // Un empleado sin rol asignado ve todas las categorías. Con rol asignado,
+  // ve las categorías que no tengan restricción (roles vacío) o que incluyan
+  // su rol en la lista de roles permitidos de esa categoría.
   function getAllowedCategories(role){
-    if(!role || !ROLE_CATEGORIES[role]) return categories;
-    return categories.filter(c => ROLE_CATEGORIES[role].includes(c));
+    if(!role) return categories.map(c=>c.name);
+    return categories.filter(c => !c.roles || c.roles.length===0 || c.roles.includes(role)).map(c=>c.name);
   }
 
   // Muestra una notificación flotante (toast) en la parte inferior de la pantalla
@@ -292,10 +389,30 @@
     toast._hideTimer = setTimeout(() => toast.classList.remove("show"), 2600);
   }
 
+  // Carga la librería de Excel (xlsx) recién cuando hace falta (exportar,
+  // importar), en vez de siempre al abrir la app. Si ya está cargada, no
+  // vuelve a pedirla; si dos llamados piden cargarla al mismo tiempo,
+  // ambos esperan la misma promesa en vez de insertar el script dos veces.
+  let xlsxLoadPromise = null;
+  function ensureXLSXLoaded(){
+    if(typeof XLSX !== "undefined") return Promise.resolve();
+    if(xlsxLoadPromise) return xlsxLoadPromise;
+    xlsxLoadPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      s.onload = () => resolve();
+      s.onerror = () => { xlsxLoadPromise = null; reject(new Error("No se pudo cargar la librería de Excel")); };
+      document.head.appendChild(s);
+    });
+    return xlsxLoadPromise;
+  }
+
   // Genera y descarga un archivo Excel (.xlsx) con una o varias hojas.
   // sheetsDef: array de { name, rows } donde rows es un array de arrays (filas).
-  function exportWorkbook(sheetsDef, filename){
-    if(typeof XLSX === "undefined"){
+  async function exportWorkbook(sheetsDef, filename){
+    try{
+      await ensureXLSXLoaded();
+    }catch(e){
       alert("No se pudo cargar la librería de Excel. Revisá tu conexión a internet e intentá de nuevo.");
       return;
     }
@@ -324,6 +441,7 @@
   // Importa un archivo Excel (con el mismo formato que "Exportar todo") a Firestore.
   // Solo AGREGA lo que sea nuevo: no borra ni duplica lo que ya está cargado.
   async function importWorkbookFile(file){
+    await ensureXLSXLoaded();
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf, {type:"array"});
     let addedCats = 0, addedProds = 0, addedEmps = 0, addedMovs = 0;
@@ -334,10 +452,10 @@
       const newCats = [];
       rows.forEach(r=>{
         const cat = String(r["Categoría"]||"").trim();
-        if(cat && !categories.includes(cat) && !newCats.includes(cat)) newCats.push(cat);
+        if(cat && !categories.some(c=>c.name===cat) && !newCats.includes(cat)) newCats.push(cat);
       });
       if(newCats.length){
-        categories.push(...newCats);
+        categories.push(...newCats.map(n=>({name:n, roles:[]})));
         await saveConfig();
         addedCats = newCats.length;
       }
@@ -519,23 +637,31 @@
 
       // Se piden config, empleados, productos y movimientos todos juntos
       // (en paralelo) en lugar de uno por uno, para que la carga inicial
-      // no espere una respuesta tras otra.
-      const [configSnap, empSnap, prodSnap, movSnap, delStatsSnap] = await Promise.all([
+      // no espere una respuesta tras otra. "deletedMovStats" queda afuera
+      // a propósito: solo se usa en la pestaña Estadísticas del admin,
+      // así que se trae recién ahí (ver ensureDeletedStatsLoaded) en vez
+      // de sumar otra consulta al arranque de la app.
+      const [configSnap, empSnap, prodSnap, movSnap] = await Promise.all([
         configRef.get(),
         db.collection("employees").get(),
         db.collection("products").get(),
-        db.collection("movements").get(),
-        db.collection("deletedMovStats").get()
+        db.collection("movements").get()
       ]);
 
       if(!configSnap.exists){
         config = { adminPin: "1982", stock: {} };
-        categories = DEFAULT_CATEGORIES.slice();
+        categories = DEFAULT_CATEGORIES.map(c=>({...c}));
         await configRef.set({ adminPin: config.adminPin, stock: config.stock, categories });
       }else{
         const data = configSnap.data();
         config = { adminPin: data.adminPin || "1982", stock: data.stock || {} };
-        categories = (data.categories && data.categories.length) ? data.categories : DEFAULT_CATEGORIES.slice();
+        if(data.categories && data.categories.length){
+          // Compatibilidad: si vienen como strings (formato viejo), migrarlas
+          // al nuevo formato {name, roles} usando el mapeo legado.
+          categories = data.categories.map(c => typeof c === "string" ? migrateLegacyCategory(c) : c);
+        }else{
+          categories = DEFAULT_CATEGORIES.map(c=>({...c}));
+        }
       }
 
       if(empSnap.empty){
@@ -582,8 +708,6 @@
       }
 
       movements = movSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-      deletedStats = {};
-      delStatsSnap.docs.forEach(d => { deletedStats[d.id] = d.data(); });
 
       // Si había una sesión guardada en este navegador, se restaura
       // en vez de mostrar la pantalla de login. La de administrador
@@ -651,6 +775,15 @@
     }, { merge: true });
     deletedStats[key] = { employeeName: name, count: (deletedStats[key]?.count || 0) + 1 };
   }
+  // Trae "deletedMovStats" desde Firestore recién la primera vez que hace
+  // falta (pestaña Estadísticas), en vez de siempre al abrir la app.
+  async function ensureDeletedStatsLoaded(){
+    if(deletedStatsLoaded) return;
+    const snap = await db.collection("deletedMovStats").get();
+    deletedStats = {};
+    snap.docs.forEach(d => { deletedStats[d.id] = d.data(); });
+    deletedStatsLoaded = true;
+  }
   const SELF_DELETE_WINDOW_MS = 5 * 60 * 1000; // 5 minutos para que un empleado borre su propio movimiento
   async function deleteMovement(id){
     const mov = movements.find(m => m.id === id);
@@ -678,6 +811,7 @@
       await batch.commit();
     }
     deletedStats = {};
+    deletedStatsLoaded = true;
   }
 
   // =======================================================================
@@ -728,70 +862,257 @@
       clearFailedAttempts(emp.id);
       currentUser = { id: emp.id, name: emp.name, role: emp.role || "" };
       view = "form";
+      formStep = "categoria";
+      selectedCategory = null;
+      selectedProductId = null;
+      qtyValue = 1;
+      areaValue = "";
+      areaSelected = "";
       saveSession({ type:"user", empId: emp.id });
       render();
     };
     document.getElementById("goAdmin").onclick = () => { view = "admin-login"; render(); };
   }
 
+  // Cierra la sesión del empleado y reinicia el asistente de retiro para la próxima vez.
+  function doLogout(){
+    currentUser = null;
+    view = "login";
+    formStep = "categoria";
+    selectedCategory = null;
+    selectedProductId = null;
+    qtyValue = 1;
+    areaValue = "";
+    areaSelected = "";
+    clearSession();
+    render();
+  }
+
   // =======================================================================
-  // FORM (registrar retiro)
+  // FORM (registrar retiro) — asistente paso a paso, pensado para que lo
+  // use gente mayor: un paso a la vez, botones grandes y bien diferenciados.
+  //   categoria -> producto -> cantidad (con el botón de registrar) -> lista
   // =======================================================================
+  function topbarWizard(subtitle){
+    return `
+      <div class="topbar">
+        <div class="row">
+          <div><h1>Hola, ${esc(currentUser.name)}</h1><p class="sub">${esc(subtitle)}</p></div>
+          <button class="link" id="logoutBtn">Cerrar sesión</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function getMisMovs(){
+    return movements
+      .filter(m => m.employeeId === currentUser.id)
+      .sort((a,b)=>b.ts-a.ts)
+      .slice(0,5);
+  }
+
   function renderForm(){
     const allowedCats = getAllowedCategories(currentUser.role);
     if(!allowedCats.length){
       app.innerHTML = `
-        <div class="topbar">
-          <div class="row">
-            <div><h1>Hola, ${esc(currentUser.name)}</h1><p class="sub">Registrar retiro de stock</p></div>
-            <button class="link" id="logoutBtn">Cerrar sesión</button>
-          </div>
-        </div>
+        ${topbarWizard("Registrar retiro de stock")}
         <section>
           <div class="card">
             <div class="msg info">Todavía no tenés categorías asignadas. Pedile a un administrador que te asigne un rol en la sección Empleados.</div>
           </div>
         </section>
       `;
-      document.getElementById("logoutBtn").onclick = () => { currentUser=null; view="login"; clearSession(); render(); };
+      document.getElementById("logoutBtn").onclick = doLogout;
       return;
     }
-    if(!selectedCategory || !allowedCats.includes(selectedCategory)) selectedCategory = allowedCats[0];
-    const misMovs = movements
-      .filter(m => m.employeeId === currentUser.id)
-      .sort((a,b)=>b.ts-a.ts)
-      .slice(0,5);
+    if(!selectedCategory || !allowedCats.includes(selectedCategory)) selectedCategory = null;
+
+    if(formStep === "producto" && !selectedCategory) formStep = "categoria";
+    if(formStep === "cantidad" && !selectedProductId) formStep = "categoria";
+
+    if(formStep === "producto") renderFormProducto(allowedCats);
+    else if(formStep === "cantidad") renderFormCantidad();
+    else if(formStep === "lista") renderFormLista();
+    else renderFormCategoria(allowedCats);
+  }
+
+  // Paso 1: carteles gigantes de colores bien distintos, uno por categoría.
+  function renderFormCategoria(allowedCats){
+    app.innerHTML = `
+      ${topbarWizard("Elegí una categoría")}
+      <section>
+        <div class="cat-cards">
+          ${allowedCats.map(c=>{
+            const col = getCategoryColor(c);
+            return `
+              <button type="button" class="cat-card" data-cat="${esc(c)}" style="background:${col.bg};color:${col.text};">
+                <span class="cat-card-icon">${getCategoryIcon(c)}</span>
+                <span class="cat-card-label">${esc(c)}</span>
+              </button>
+            `;
+          }).join("")}
+        </div>
+        <div class="footer-link"><button id="verMovBtn">Ver mis últimos movimientos</button></div>
+      </section>
+    `;
+    document.getElementById("logoutBtn").onclick = doLogout;
+    document.getElementById("verMovBtn").onclick = () => { formStep = "lista"; render(); };
+    Array.from(document.querySelectorAll(".cat-card")).forEach(b=>{
+      b.onclick = () => {
+        selectedCategory = b.dataset.cat;
+        selectedProductId = null;
+        formStep = "producto";
+        render();
+      };
+    });
+  }
+
+  // Paso 2: lista de productos de la categoría elegida, en botones grandes.
+  function renderFormProducto(allowedCats){
     const reqCount = {};
     movements.forEach(m => { reqCount[m.product] = (reqCount[m.product]||0) + 1; });
     const prodsInCat = products.filter(p=>p.category===selectedCategory)
       .sort((a,b)=> (reqCount[b.name]||0) - (reqCount[a.name]||0) || a.name.localeCompare(b.name,"es",{sensitivity:"base"}));
 
     app.innerHTML = `
-      <div class="topbar">
-        <div class="row">
-          <div><h1>Hola, ${esc(currentUser.name)}</h1><p class="sub">Registrar retiro de stock</p></div>
-          <button class="link" id="logoutBtn">Cerrar sesión</button>
-        </div>
-      </div>
+      ${topbarWizard(selectedCategory)}
       <section>
-        <div class="card">
-          <div id="formMsg"></div>
-          <label>Categoría</label>
-          <div class="tabs" id="catTabs">
-            ${allowedCats.map(c=>`<button type="button" data-cat="${esc(c)}" class="${c===selectedCategory?"active":""}">${esc(c)}</button>`).join("")}
-          </div>
-          <label>Producto</label>
-          <select id="prodSelect">
-            ${prodsInCat.length
-              ? prodsInCat.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} (${esc(p.medida)})</option>`).join("")
-              : `<option value="">No hay productos cargados en esta categoría</option>`}
-          </select>
-          <label>Cantidad</label>
-          <input type="number" id="qtyInput" min="1" step="1" value="1">
-          <label>Área / destino (opcional)</label>
-          <input type="text" id="areaInput" placeholder="Ej: Habitaciones, Cocina...">
-          <button class="btn btn-primary" id="submitBtn" ${prodsInCat.length?"":"disabled"}>Registrar movimiento</button>
+        <button type="button" class="wizard-back" id="backToCat">← Volver a categorías</button>
+        <div class="prod-list">
+          ${prodsInCat.length ? prodsInCat.map(p=>`
+            <button type="button" class="prod-card" data-id="${esc(p.id)}">
+              <span>${esc(p.name)}</span>
+              <span class="prod-card-medida">${esc(p.medida)}</span>
+            </button>
+          `).join("") : `<div class="empty">No hay productos cargados en esta categoría.</div>`}
         </div>
+      </section>
+    `;
+    document.getElementById("logoutBtn").onclick = doLogout;
+    document.getElementById("backToCat").onclick = () => { formStep = "categoria"; render(); };
+    Array.from(document.querySelectorAll(".prod-card")).forEach(b=>{
+      b.onclick = () => {
+        selectedProductId = b.dataset.id;
+        qtyValue = 1;
+        areaValue = "";
+        areaSelected = "";
+        formStep = "cantidad";
+        render();
+      };
+    });
+  }
+
+  // Paso 3: cuántos retira, con botones grandes de + y -, y el cartel de
+  // "Registrar movimiento" ya mismo abajo (sin un paso de confirmación aparte).
+  function renderFormCantidad(){
+    const prod = products.find(p=>p.id===selectedProductId);
+    if(!prod){ formStep = "categoria"; render(); return; }
+    const esBebidas = prod.category === "Bebidas";
+    const areaBlockHTML = esBebidas ? `
+          <label style="margin-top:6px;">Área / destino</label>
+          <div class="area-opts" id="areaOpts">
+            <button type="button" class="area-opt-btn${areaSelected==='Venta'?' active':''}" data-val="Venta">VENTA</button>
+            <button type="button" class="area-opt-btn${areaSelected==='Dirigentes'?' active':''}" data-val="Dirigentes">DIRIGENTES</button>
+            <button type="button" class="area-opt-btn${areaSelected==='Otro'?' active':''}" data-val="Otro">OTRO</button>
+          </div>
+          ${areaSelected==='Otro' ? `<input type="text" id="areaInput" placeholder="Especificá el área / destino..." value="${esc(areaValue)}">` : ``}
+    ` : `
+          <label style="margin-top:6px;">Área / destino (opcional)</label>
+          <input type="text" id="areaInput" placeholder="Ej: Habitaciones, Cocina..." value="${esc(areaValue)}">
+    `;
+    app.innerHTML = `
+      ${topbarWizard("¿Cuántos retirás?")}
+      <section>
+        <button type="button" class="wizard-back" id="backToProd">← Volver a productos</button>
+        <div class="card" style="text-align:center;">
+          <h2 style="font-size:20px;text-align:center;">${esc(prod.name)} (${esc(prod.medida)})</h2>
+          <div class="qty-wizard">
+            <button type="button" class="qty-btn" id="qtyMinus">−</button>
+            <div class="qty-display" id="qtyDisplay">${qtyValue}</div>
+            <button type="button" class="qty-btn" id="qtyPlus">+</button>
+          </div>
+          ${areaBlockHTML}
+        </div>
+        <button type="button" class="confirm-giant" id="confirmBtn">REGISTRAR MOVIMIENTO</button>
+        <div id="confirmMsg" style="padding:0 20px;"></div>
+      </section>
+    `;
+    document.getElementById("logoutBtn").onclick = doLogout;
+    document.getElementById("backToProd").onclick = () => { formStep = "producto"; render(); };
+    const display = document.getElementById("qtyDisplay");
+    const minusBtn = document.getElementById("qtyMinus");
+    document.getElementById("qtyPlus").onclick = () => { qtyValue++; display.textContent = qtyValue; minusBtn.disabled = qtyValue<=1; };
+    minusBtn.disabled = qtyValue<=1;
+    minusBtn.onclick = () => { if(qtyValue>1){ qtyValue--; display.textContent = qtyValue; minusBtn.disabled = qtyValue<=1; } };
+
+    if(esBebidas){
+      Array.from(document.querySelectorAll(".area-opt-btn")).forEach(b=>{
+        b.onclick = () => {
+          areaSelected = b.dataset.val;
+          if(areaSelected !== "Otro"){ areaValue = areaSelected; }
+          else { areaValue = ""; }
+          render();
+        };
+      });
+    }
+    const areaInput = document.getElementById("areaInput");
+
+    document.getElementById("confirmBtn").onclick = async () => {
+      const btn = document.getElementById("confirmBtn");
+      const msg = document.getElementById("confirmMsg");
+      if(esBebidas){
+        if(!areaSelected){
+          msg.innerHTML = `<div class="msg error">Elegí una opción de área / destino.</div>`;
+          return;
+        }
+        areaValue = areaSelected === "Otro" ? (areaInput ? areaInput.value.trim() : "") : areaSelected;
+        if(areaSelected === "Otro" && !areaValue){
+          msg.innerHTML = `<div class="msg error">Escribí el área / destino.</div>`;
+          return;
+        }
+      } else {
+        areaValue = areaInput.value.trim();
+      }
+      const mov = {
+        employeeId: currentUser.id, employeeName: currentUser.name,
+        product: prod.name, category: prod.category,
+        qty: qtyValue, type: "Salida", area: areaValue, ts: Date.now()
+      };
+      btn.disabled = true;
+      btn.textContent = "Guardando...";
+      try{
+        await addMovement(mov);
+        btn.classList.add("done");
+        btn.textContent = "✓ REGISTRADO";
+        showToast(`${prod.name}: movimiento registrado correctamente`, "ok");
+      }catch(err){
+        msg.innerHTML = `<div class="msg error">No se pudo guardar: ${esc(err.message||err)}</div>`;
+        btn.disabled = false;
+        btn.textContent = "REGISTRAR MOVIMIENTO";
+        return;
+      }
+      setTimeout(() => {
+        selectedProductId = null;
+        qtyValue = 1;
+        areaValue = "";
+        areaSelected = "";
+        lastMovSuccess = true;
+        formStep = "lista";
+        render();
+      }, 700);
+    };
+  }
+
+  // Paso 5: lista de movimientos, con opción de arrancar un nuevo retiro.
+  function renderFormLista(){
+    const misMovs = getMisMovs();
+    const showSuccess = lastMovSuccess;
+    lastMovSuccess = false;
+    app.innerHTML = `
+      ${topbarWizard("Tus movimientos")}
+      <section>
+        ${showSuccess ? `<div class="success-banner">✓ Listo, movimiento registrado</div>` : ""}
+        <button type="button" class="btn btn-primary" id="nuevoMovBtn" style="margin-bottom:16px;">+ Registrar otro movimiento</button>
         <div class="card">
           <h2>Tus últimos movimientos</h2>
           <div id="misMovs">
@@ -811,11 +1132,13 @@
         </div>
       </section>
     `;
-
-    Array.from(document.querySelectorAll("#catTabs button")).forEach(b=>{
-      b.onclick = () => { selectedCategory = b.dataset.cat; render(); };
-    });
-    document.getElementById("logoutBtn").onclick = () => { currentUser=null; view="login"; clearSession(); render(); };
+    document.getElementById("logoutBtn").onclick = doLogout;
+    document.getElementById("nuevoMovBtn").onclick = () => {
+      selectedCategory = null;
+      selectedProductId = null;
+      formStep = "categoria";
+      render();
+    };
 
     Array.from(document.querySelectorAll("[data-action='delMisMov']")).forEach(btn=>{
       btn.onclick = async () => {
@@ -839,40 +1162,9 @@
       const msRestantes = SELF_DELETE_WINDOW_MS - (Date.now() - misMovs[0].ts);
       if(msRestantes > 0 && msRestantes < SELF_DELETE_WINDOW_MS){
         clearTimeout(window.__misMovsTimer);
-        window.__misMovsTimer = setTimeout(() => { if(view==="form") render(); }, msRestantes + 500);
+        window.__misMovsTimer = setTimeout(() => { if(view==="form" && formStep==="lista") render(); }, msRestantes + 500);
       }
     }
-
-    document.getElementById("submitBtn").onclick = async () => {
-      const prodId = document.getElementById("prodSelect").value;
-      const prod = products.find(p=>p.id===prodId);
-      const qty = parseInt(document.getElementById("qtyInput").value, 10);
-      const area = document.getElementById("areaInput").value.trim();
-      const msg = document.getElementById("formMsg");
-      if(!prod){ msg.innerHTML = `<div class="msg error">Elegí un producto válido.</div>`; return; }
-      if(!qty || qty <= 0){ msg.innerHTML = `<div class="msg error">Ingresá una cantidad válida.</div>`; return; }
-
-      const mov = {
-        employeeId: currentUser.id, employeeName: currentUser.name,
-        product: prod.name, category: prod.category,
-        qty, type: "Salida", area, ts: Date.now()
-      };
-      const btn = document.getElementById("submitBtn");
-      msg.innerHTML = `<div class="msg">Guardando...</div>`;
-      btn.disabled = true;
-      try{
-        await addMovement(mov);
-        msg.innerHTML = `<div class="msg ok">Movimiento registrado ✓</div>`;
-        btn.classList.add("btn-success");
-        btn.textContent = "Registrado ✓";
-        showToast(`${prod.name}: movimiento registrado correctamente`, "ok");
-      }catch(err){
-        msg.innerHTML = `<div class="msg error">No se pudo guardar: ${esc(err.message||err)}</div>`;
-        btn.disabled = false;
-        return;
-      }
-      setTimeout(render, 900);
-    };
   }
 
   // =======================================================================
@@ -941,9 +1233,9 @@
 
       const prodAoa = [["Categoría","Producto","Medida"]];
       categories.forEach(cat => {
-        products.filter(p=>p.category===cat).forEach(p => prodAoa.push([cat, p.name, p.medida]));
+        products.filter(p=>p.category===cat.name).forEach(p => prodAoa.push([cat.name, p.name, p.medida]));
       });
-      products.filter(p=>!categories.includes(p.category)).forEach(p => prodAoa.push([p.category||"", p.name, p.medida]));
+      products.filter(p=>!categories.some(c=>c.name===p.category)).forEach(p => prodAoa.push([p.category||"", p.name, p.medida]));
 
       const empAoa = [["Nombre","PIN","Rol"]];
       employees.forEach(e => empAoa.push([e.name, e.pin, e.role || ""]));
@@ -956,10 +1248,6 @@
       ], "control_stock_completo.xlsx");
     };
     document.getElementById("importAllBtn").onclick = () => {
-      if(typeof XLSX === "undefined"){
-        alert("No se pudo cargar la librería de Excel. Revisá tu conexión a internet e intentá de nuevo.");
-        return;
-      }
       if(!confirm("Vas a importar datos desde un archivo Excel (con el mismo formato que \"Exportar todo\"). Se van a AGREGAR los productos, empleados y movimientos nuevos que traiga el archivo; no se borra ni se duplica lo que ya está cargado. ¿Continuar?")) return;
       document.getElementById("importFileInput").click();
     };
@@ -988,7 +1276,7 @@
 
   function renderAdminMovimientos(content){
     const empOptions = ["Todos", ...new Set(movements.map(m=>m.employeeName))];
-    const catOptions = ["Todas", ...categories];
+    const catOptions = ["Todas", ...categories.map(c=>c.name)];
     content.innerHTML = `
       <div class="card">
         <div class="filters">
@@ -1088,7 +1376,7 @@
 
   function renderAdminResumen(content){
     const empOptions = ["Todos", ...new Set(movements.map(m=>m.employeeName))];
-    const catOptions = ["Todas", ...categories];
+    const catOptions = ["Todas", ...categories.map(c=>c.name)];
     content.innerHTML = `
       <div class="card">
         <h2>Resumen de productos retirados</h2>
@@ -1270,6 +1558,16 @@
       const byCategory = groupSum(rows, m=>m.category||"Sin categoría").sort((a,b)=>b.total-a.total);
       drawBars("eTopCategories", byCategory);
 
+      drawDeleted();
+    }
+
+    // Aparte de draw(): no depende de los filtros de fecha, y sus datos se
+    // traen de Firestore recién la primera vez que se abre esta pestaña.
+    function drawDeleted(){
+      if(!deletedStatsLoaded){
+        document.getElementById("eDeletedByEmployee").innerHTML = `<div class="empty">Cargando...</div>`;
+        return;
+      }
       const byDeleted = Object.values(deletedStats)
         .map(v=>({key: v.employeeName || "Desconocido", total: v.count || 0, count: v.count || 0}))
         .sort((a,b)=>b.total-a.total);
@@ -1284,25 +1582,53 @@
       draw();
     };
     draw();
+    if(!deletedStatsLoaded){
+      ensureDeletedStatsLoaded().then(() => { if(view==="admin" && adminTab==="estadisticas") drawDeleted(); });
+    }
   }
 
   function renderAdminProductos(content){
     content.innerHTML = `
       <div class="card">
         <h2>Categorías</h2>
+        <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
+          Marcá qué roles pueden ver cada categoría al registrar un retiro. Si no marcás ninguno,
+          la categoría queda visible para todos los roles.
+        </p>
         <div id="catList"></div>
         <div class="add-cat-row">
-          <input type="text" id="newCatInput" placeholder="Nueva categoría">
+          <input type="text" id="newCatInput" placeholder="Nueva categoría" style="flex:1 1 100%;">
+          <div class="cat-role-checks">
+            ${ROLES.map(r=>`
+              <label class="cat-role-check"><input type="checkbox" class="newCatRole" value="${esc(r)}"> ${esc(r)}</label>
+            `).join("")}
+          </div>
           <button class="small-btn" id="addCatBtn">Agregar</button>
         </div>
       </div>
       <div class="card">
         <h2>Productos</h2>
+        <div class="filters">
+          <div style="flex:1;min-width:150px;">
+            <label>Filtrar por categoría</label>
+            <select id="prodFilterCat" style="margin-bottom:0;">
+              <option value="">Todas las categorías (${products.length})</option>
+              ${categories.map(c=>`<option value="${esc(c.name)}" ${c.name===adminProdFilterCat?"selected":""}>${esc(c.name)} (${products.filter(p=>p.category===c.name).length})</option>`).join("")}
+            </select>
+          </div>
+          <div style="flex:1;min-width:150px;">
+            <label>Ordenar por</label>
+            <select id="prodSortMode" style="margin-bottom:0;">
+              <option value="" ${adminProdSortMode===""?"selected":""}>Orden de carga</option>
+              <option value="nombre" ${adminProdSortMode==="nombre"?"selected":""}>Nombre (A-Z)</option>
+            </select>
+          </div>
+        </div>
         <div id="prodList"></div>
         <div class="prod-row" style="margin-top:10px;">
           <input type="text" id="newProdName" placeholder="Nombre del producto">
           <input type="text" id="newProdMedida" placeholder="Medida (ej: 5L)">
-          <select id="newProdCat">${categories.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("")}</select>
+          <select id="newProdCat">${categories.map(c=>`<option value="${esc(c.name)}" ${c.name===adminProdFilterCat?"selected":""}>${esc(c.name)}</option>`).join("")}</select>
           <button class="small-btn" id="addProdBtn">Agregar</button>
         </div>
       </div>
@@ -1310,30 +1636,51 @@
     function drawCats(){
       document.getElementById("catList").innerHTML = categories.map((c,i)=>`
         <div class="emp-row">
-          <input type="text" value="${esc(c)}" data-idx="${i}" class="catName">
+          <input type="text" value="${esc(c.name)}" data-idx="${i}" class="catName">
           <button class="small-btn" data-idx="${i}" data-action="delCat">Quitar</button>
+          <div class="cat-role-checks" style="order:5;flex:1 1 100%;">
+            ${ROLES.map(r=>`
+              <label class="cat-role-check">
+                <input type="checkbox" class="catRole" data-idx="${i}" value="${esc(r)}" ${(c.roles||[]).includes(r)?"checked":""}> ${esc(r)}
+              </label>
+            `).join("")}
+          </div>
         </div>
       `).join("");
       Array.from(document.querySelectorAll(".catName")).forEach(inp=>{
         inp.onchange = async () => {
-          const oldName = categories[inp.dataset.idx];
+          const oldName = categories[inp.dataset.idx].name;
           const newName = inp.value.trim();
           if(!newName) return;
           const affected = products.filter(p=>p.category===oldName);
           for(const p of affected){ await updateProduct(p.id, {category:newName}); p.category = newName; }
-          categories[inp.dataset.idx] = newName;
+          categories[inp.dataset.idx].name = newName;
+          if(adminProdFilterCat === oldName) adminProdFilterCat = newName;
           await saveConfig();
           render();
         };
       });
+      Array.from(document.querySelectorAll(".catRole")).forEach(chk=>{
+        chk.onchange = async () => {
+          const cat = categories[chk.dataset.idx];
+          cat.roles = cat.roles || [];
+          if(chk.checked){
+            if(!cat.roles.includes(chk.value)) cat.roles.push(chk.value);
+          }else{
+            cat.roles = cat.roles.filter(r=>r!==chk.value);
+          }
+          await saveConfig();
+        };
+      });
       Array.from(document.querySelectorAll("[data-action='delCat']")).forEach(btn=>{
         btn.onclick = async () => {
-          const catName = categories[btn.dataset.idx];
+          const catName = categories[btn.dataset.idx].name;
           if(products.some(p=>p.category===catName)){
             alert("Esta categoría tiene productos cargados. Movelos o eliminalos primero.");
             return;
           }
           categories.splice(btn.dataset.idx,1);
+          if(adminProdFilterCat === catName) adminProdFilterCat = "";
           await saveConfig();
           render();
         };
@@ -1344,38 +1691,60 @@
     document.getElementById("addCatBtn").onclick = async () => {
       const val = document.getElementById("newCatInput").value.trim();
       if(!val) return;
-      if(categories.includes(val)){ alert("Ya existe esa categoría."); return; }
-      categories.push(val);
+      if(categories.some(c=>c.name===val)){ alert("Ya existe esa categoría."); return; }
+      const roles = Array.from(document.querySelectorAll(".newCatRole:checked")).map(chk=>chk.value);
+      categories.push({name: val, roles});
       await saveConfig();
       render();
     };
 
+    // Lista de productos: se puede filtrar por categoría y ordenar por
+    // nombre para editarlos más fácil de a una categoría por vez, y con
+    // letra más chica entran todos los campos sin amontonarse.
     function drawProds(){
-      document.getElementById("prodList").innerHTML = products.map((p,i)=>`
+      let filtered = adminProdFilterCat ? products.filter(p=>p.category===adminProdFilterCat) : products.slice();
+      if(adminProdSortMode === "nombre"){
+        filtered = filtered.slice().sort((a,b)=>a.name.localeCompare(b.name,"es",{sensitivity:"base"}));
+      }
+      document.getElementById("prodList").innerHTML = filtered.map(p=>`
         <div class="prod-row">
-          <input type="text" value="${esc(p.name)}" data-idx="${i}" class="prodName">
-          <input type="text" value="${esc(p.medida)}" data-idx="${i}" class="prodMedida" style="max-width:70px;">
-          <select data-idx="${i}" class="prodCat">
-            ${categories.map(c=>`<option value="${esc(c)}" ${c===p.category?"selected":""}>${esc(c)}</option>`).join("")}
+          <input type="text" value="${esc(p.name)}" data-id="${esc(p.id)}" class="prodName">
+          <input type="text" value="${esc(p.medida)}" data-id="${esc(p.id)}" class="prodMedida" style="max-width:70px;">
+          <select data-id="${esc(p.id)}" class="prodCat">
+            ${categories.map(c=>`<option value="${esc(c.name)}" ${c.name===p.category?"selected":""}>${esc(c.name)}</option>`).join("")}
           </select>
-          <button class="small-btn" data-idx="${i}" data-action="delProd">Quitar</button>
+          <button class="small-btn" data-id="${esc(p.id)}" data-action="delProd">Quitar</button>
         </div>
-      `).join("") || `<div class="empty">No hay productos todavía.</div>`;
+      `).join("") || `<div class="empty">No hay productos en esta categoría.</div>`;
 
       Array.from(document.querySelectorAll(".prodName")).forEach(inp=>{
-        inp.onchange = async () => { const p=products[inp.dataset.idx]; p.name=inp.value.trim(); await updateProduct(p.id,{name:p.name}); };
+        inp.onchange = async () => { const p=products.find(x=>x.id===inp.dataset.id); p.name=inp.value.trim(); await updateProduct(p.id,{name:p.name}); };
       });
       Array.from(document.querySelectorAll(".prodMedida")).forEach(inp=>{
-        inp.onchange = async () => { const p=products[inp.dataset.idx]; p.medida=inp.value.trim(); await updateProduct(p.id,{medida:p.medida}); };
+        inp.onchange = async () => { const p=products.find(x=>x.id===inp.dataset.id); p.medida=inp.value.trim(); await updateProduct(p.id,{medida:p.medida}); };
       });
       Array.from(document.querySelectorAll(".prodCat")).forEach(sel=>{
-        sel.onchange = async () => { const p=products[sel.dataset.idx]; p.category=sel.value; await updateProduct(p.id,{category:p.category}); };
+        sel.onchange = async () => {
+          const p=products.find(x=>x.id===sel.dataset.id);
+          p.category=sel.value;
+          await updateProduct(p.id,{category:p.category});
+          drawProds();
+        };
       });
       Array.from(document.querySelectorAll("[data-action='delProd']")).forEach(btn=>{
-        btn.onclick = async () => { await deleteProduct(products[btn.dataset.idx].id); drawProds(); };
+        btn.onclick = async () => { await deleteProduct(btn.dataset.id); drawProds(); };
       });
     }
     drawProds();
+
+    document.getElementById("prodFilterCat").onchange = (e) => {
+      adminProdFilterCat = e.target.value;
+      drawProds();
+    };
+    document.getElementById("prodSortMode").onchange = (e) => {
+      adminProdSortMode = e.target.value;
+      drawProds();
+    };
 
     document.getElementById("addProdBtn").onclick = async () => {
       const name = document.getElementById("newProdName").value.trim();
@@ -1395,9 +1764,8 @@
         <h2>Empleados y PIN</h2>
         <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
           Cada empleado necesita su nombre y un PIN propio para poder registrar movimientos.
-          El rol determina qué categorías de productos puede ver: Mucama y Recepción acceden a
-          Productos de limpieza y Bebidas; Mantenimiento accede además a Mantenimiento. "Todas las
-          categorías" deja al empleado sin restricción.
+          El rol determina qué categorías puede ver (eso se configura por categoría, en la pestaña
+          Productos). "Todas las categorías" deja al empleado sin restricción.
         </p>
         <div id="empList"></div>
         <button class="btn btn-secondary" id="addEmpBtn" style="margin-top:8px;">+ Agregar empleado</button>
@@ -1487,7 +1855,60 @@
     else if(view==="form") renderForm();
     else if(view==="admin-login") renderAdminLogin();
     else if(view==="admin") renderAdmin();
+    // Cada pantalla nueva arranca arriba del todo: si no, al venir de una
+    // pantalla donde se había scrolleado hacia abajo (como al confirmar un
+    // retiro), la siguiente pantalla podía verse descentrada, con el título
+    // cortado arriba.
+    window.scrollTo(0, 0);
   }
+
+  // =======================================================================
+  // BOTÓN "ATRÁS" DEL CELULAR
+  // En vez de cerrar el navegador/app: para un empleado (view "form"), el
+  // atrás lo manda directo a la pantalla de elegir categoría, sea cual sea
+  // el paso en el que esté. Para el administrador, lo manda al menú
+  // principal (login). Una vez en esa pantalla "raíz", si vuelve a tocar
+  // atrás (dentro de los 2 segundos) recién ahí se deja salir.
+  // =======================================================================
+  let backExitArmed = false;
+  let backExitTimer = null;
+
+  function pushHistoryGuard(){
+    history.pushState({ appGuard: true }, "", location.href);
+  }
+
+  function isRootScreen(){
+    return view === "login" || (view === "form" && formStep === "categoria");
+  }
+
+  function backOneStep(){
+    if(view === "form"){
+      formStep = "categoria";
+      render();
+    } else if(view === "admin-login" || view === "admin"){
+      view = "login";
+      render();
+    }
+  }
+
+  window.addEventListener("popstate", function(){
+    if(!isRootScreen()){
+      backOneStep();
+      backExitArmed = false;
+      pushHistoryGuard();
+    } else if(backExitArmed){
+      // Segunda vez seguida ya en la pantalla raíz: se deja salir,
+      // no se vuelve a bloquear el historial.
+    } else {
+      backExitArmed = true;
+      showToast("Tocá atrás de nuevo para salir", "info");
+      pushHistoryGuard();
+      clearTimeout(backExitTimer);
+      backExitTimer = setTimeout(() => { backExitArmed = false; }, 2000);
+    }
+  });
+
+  pushHistoryGuard();
 
   // =======================================================================
   // INICIO
