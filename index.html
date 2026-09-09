@@ -600,35 +600,45 @@
   }
 
   // Lleva el conteo de intentos fallidos de PIN por empleado y bloquea
-  // el usuario tras 5 intentos incorrectos seguidos. Persiste en el
-  // navegador para que el bloqueo no se pierda si se recarga la página.
-  const LOGIN_ATTEMPTS_KEY = "controlStockLoginAttempts";
+  // el usuario tras 5 intentos incorrectos seguidos. Se guarda en Firestore
+  // (colección "loginAttempts", un documento por empleado) en vez de en
+  // localStorage: así el bloqueo es real y no se pierde ni se puede evadir
+  // recargando la página, cerrando el navegador, usando modo privado o
+  // probando desde otro dispositivo. Los datos se traen una sola vez al
+  // arrancar la app (ver loadAll) y desde ahí se mantienen en memoria,
+  // sincronizando cada cambio con Firestore.
   const MAX_LOGIN_ATTEMPTS = 5;
-  function readLoginAttempts(){
-    try{ return JSON.parse(localStorage.getItem(LOGIN_ATTEMPTS_KEY)) || {}; }catch(e){ return {}; }
-  }
-  function saveLoginAttempts(data){
-    try{ localStorage.setItem(LOGIN_ATTEMPTS_KEY, JSON.stringify(data)); }catch(e){}
-  }
+  let loginAttempts = {}; // { [empId]: { count, locked } }, cargado en loadAll()
   function isEmployeeLocked(empId){
-    const attempts = readLoginAttempts();
-    return !!(attempts[empId] && attempts[empId].locked);
+    return !!(loginAttempts[empId] && loginAttempts[empId].locked);
   }
-  function registerFailedAttempt(empId){
-    const attempts = readLoginAttempts();
-    const current = attempts[empId] || { count:0, locked:false };
+  async function registerFailedAttempt(empId){
+    const current = loginAttempts[empId] || { count:0, locked:false };
     current.count += 1;
     if(current.count >= MAX_LOGIN_ATTEMPTS) current.locked = true;
-    attempts[empId] = current;
-    saveLoginAttempts(attempts);
+    loginAttempts[empId] = current;
+    try{
+      await db.collection("loginAttempts").doc(empId).set(current);
+    }catch(e){
+      // A diferencia del viejo esquema con localStorage, acá si falla el
+      // guardado se avisa: mejor que el empleado sepa que puede haber
+      // problemas de conexión, en vez de que el bloqueo "desaparezca" sin
+      // explicación en el próximo intento.
+      showToast("No se pudo guardar el intento fallido (revisá la conexión).", "error");
+    }
     return current;
   }
-  function clearFailedAttempts(empId){
-    const attempts = readLoginAttempts();
-    if(attempts[empId]){ delete attempts[empId]; saveLoginAttempts(attempts); }
+  async function clearFailedAttempts(empId){
+    if(!loginAttempts[empId]) return;
+    delete loginAttempts[empId];
+    try{
+      await db.collection("loginAttempts").doc(empId).delete();
+    }catch(e){
+      showToast("No se pudo limpiar el registro de intentos (revisá la conexión).", "error");
+    }
   }
-  function unlockEmployee(empId){
-    clearFailedAttempts(empId);
+  async function unlockEmployee(empId){
+    await clearFailedAttempts(empId);
   }
 
   // =======================================================================
@@ -663,11 +673,12 @@
       // a propósito: solo se usa en la pestaña Estadísticas del admin,
       // así que se trae recién ahí (ver ensureDeletedStatsLoaded) en vez
       // de sumar otra consulta al arranque de la app.
-      const [configSnap, empSnap, prodSnap, movSnap] = await Promise.all([
+      const [configSnap, empSnap, prodSnap, movSnap, laSnap] = await Promise.all([
         configRef.get(),
         db.collection("employees").get(),
         db.collection("products").get(),
-        db.collection("movements").get()
+        db.collection("movements").get(),
+        db.collection("loginAttempts").get()
       ]);
 
       if(!configSnap.exists){
@@ -730,6 +741,9 @@
       }
 
       movements = movSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+      loginAttempts = {};
+      laSnap.docs.forEach(d => { loginAttempts[d.id] = d.data(); });
 
       // Si había una sesión guardada en este navegador, se restaura
       // en vez de mostrar la pantalla de login. La de administrador
@@ -858,7 +872,8 @@
       </section>
     `;
     restrictPinInput(document.getElementById("pinInput"));
-    document.getElementById("loginBtn").onclick = () => {
+    document.getElementById("loginBtn").onclick = async () => {
+      const loginBtn = document.getElementById("loginBtn");
       const empId = document.getElementById("empSelect").value;
       const pinInput = document.getElementById("pinInput");
       const pin = pinInput.value.trim();
@@ -879,7 +894,9 @@
       }
       if(!emp || pin !== emp.pin){
         if(emp){
-          const attempt = registerFailedAttempt(emp.id);
+          loginBtn.disabled = true;
+          const attempt = await registerFailedAttempt(emp.id);
+          loginBtn.disabled = false;
           if(attempt.locked){
             msg.innerHTML = `<div class="msg error">Usuario bloqueado por 5 intentos fallidos seguidos. Pedile a un administrador que lo desbloquee.</div>`;
           } else {
@@ -891,7 +908,7 @@
         }
         return;
       }
-      clearFailedAttempts(emp.id);
+      await clearFailedAttempts(emp.id);
       currentUser = { id: emp.id, name: emp.name, role: emp.role || "" };
       view = "form";
       formStep = "categoria";
@@ -1853,9 +1870,10 @@
         sel.onchange = async () => { const e=employees[sel.dataset.idx]; e.role=sel.value; await updateEmployee(e.id,{role:e.role}); };
       });
       Array.from(document.querySelectorAll("[data-action='unlock']")).forEach(btn=>{
-        btn.onclick = () => {
+        btn.onclick = async () => {
           const e = employees[btn.dataset.idx];
-          unlockEmployee(e.id);
+          btn.disabled = true;
+          await unlockEmployee(e.id);
           showToast(`${e.name} fue desbloqueado`, "ok");
           drawEmpList();
         };
