@@ -328,6 +328,26 @@
   let movements = [];
   let deletedStats = {};
   let deletedStatsLoaded = false; // recién se trae de Firestore cuando hace falta (pestaña Estadísticas)
+  // Solo se cargan los movimientos de los últimos N días al arrancar (ver
+  // RECENT_MOVEMENTS_DAYS), para no descargar el historial completo cada
+  // vez que se abre la app. movementsLoadedSinceTs guarda desde qué fecha
+  // está cargado "movements" en memoria; si el admin filtra por una fecha
+  // más vieja, ensureMovementsLoadedFrom() trae ese tramo faltante desde
+  // Firestore bajo demanda (ver más abajo).
+  const RECENT_MOVEMENTS_DAYS = 60;
+  let movementsLoadedSinceTs = null;
+  // products y movements ya no se cargan antes de mostrar el login (solo
+  // hacen falta más adelante: al elegir un producto, o en el panel de
+  // admin), así que se piden en segundo plano apenas arranca la app, sin
+  // atrasar la primera pantalla. backgroundDataReady indica si esa carga
+  // ya terminó; backgroundDataPromise es la promesa en curso para que
+  // cualquier pantalla que los necesite pueda esperarla sin repetir el pedido.
+  let backgroundDataReady = false;
+  let backgroundDataPromise = null;
+  function whenBackgroundDataReady(cb){
+    if(backgroundDataReady){ cb(); return; }
+    Promise.resolve(backgroundDataPromise).then(() => cb()).catch(() => {});
+  }
   let currentUser = null;
   let view = "login";
   let selectedCategory = null;
@@ -667,17 +687,24 @@
     try{
       const configRef = db.collection("meta").doc("config");
 
-      // Se piden config, empleados, productos y movimientos todos juntos
-      // (en paralelo) en lugar de uno por uno, para que la carga inicial
+      // Productos y el historial de movimientos no hacen falta para
+      // mostrar el login (solo se usan al elegir un producto o al entrar
+      // al panel de admin), así que se piden en paralelo pero SIN esperarlos
+      // acá: arrancan a descargarse ya mismo en segundo plano (ver
+      // loadBackgroundData) y la pantalla de login no los espera.
+      backgroundDataPromise = loadBackgroundData().catch(err => {
+        showToast("No se pudieron cargar productos y movimientos: " + (err.message || err), "error");
+      });
+
+      // Lo único que bloquea el login: config, empleados, e intentos de
+      // login (chico, solo tiene entradas de empleados con intentos
+      // fallidos). Se piden en paralelo entre sí para que la carga inicial
       // no espere una respuesta tras otra. "deletedMovStats" queda afuera
       // a propósito: solo se usa en la pestaña Estadísticas del admin,
-      // así que se trae recién ahí (ver ensureDeletedStatsLoaded) en vez
-      // de sumar otra consulta al arranque de la app.
-      const [configSnap, empSnap, prodSnap, movSnap, laSnap] = await Promise.all([
+      // así que se trae recién ahí (ver ensureDeletedStatsLoaded).
+      const [configSnap, empSnap, laSnap] = await Promise.all([
         configRef.get(),
         db.collection("employees").get(),
-        db.collection("products").get(),
-        db.collection("movements").get(),
         db.collection("loginAttempts").get()
       ]);
 
@@ -710,38 +737,6 @@
         employees = empSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       }
 
-      products = prodSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-      async function seedCategory(catName, defaults){
-        const hasAny = products.some(p => p.category === catName);
-        if(!hasAny && defaults.length){
-          const batch = db.batch();
-          defaults.forEach(([name, medida]) => {
-            const ref = db.collection("products").doc();
-            batch.set(ref, { name, medida, category: catName });
-          });
-          await batch.commit();
-          return true;
-        }
-        return false;
-      }
-      // Las 3 categorías por defecto se revisan/siembran en paralelo,
-      // ya que son independientes entre sí.
-      const seededAny = (await Promise.all([
-        seedCategory("Productos de limpieza", DEFAULT_CLEANING),
-        seedCategory("Mantenimiento", DEFAULT_MAINTENANCE),
-        seedCategory("Bebidas", DEFAULT_BEVERAGES)
-      ])).some(Boolean);
-
-      // Solo se vuelve a pedir la lista de productos si realmente se
-      // sembró algo nuevo (caso raro, típicamente solo la primera vez).
-      if(seededAny){
-        const refreshedProd = await db.collection("products").get();
-        products = refreshedProd.docs.map(d => ({ id: d.id, ...d.data() }));
-      }
-
-      movements = movSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
       loginAttempts = {};
       laSnap.docs.forEach(d => { loginAttempts[d.id] = d.data(); });
 
@@ -769,6 +764,77 @@
         </div></div></section>
       `;
     }
+  }
+
+  // Carga productos y los movimientos de los últimos RECENT_MOVEMENTS_DAYS
+  // días. Se dispara en paralelo con la carga crítica de loadAll() y NO
+  // bloquea la pantalla de login; si el usuario llega a un paso que
+  // necesita estos datos antes de que termine, esa pantalla espera con un
+  // mensaje de carga (ver whenBackgroundDataReady).
+  async function loadBackgroundData(){
+    const cutoffTs = Date.now() - RECENT_MOVEMENTS_DAYS * 24 * 60 * 60 * 1000;
+    const [prodSnap, movSnap] = await Promise.all([
+      db.collection("products").get(),
+      db.collection("movements").where("ts", ">=", cutoffTs).get()
+    ]);
+    products = prodSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    movements = movSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    movementsLoadedSinceTs = cutoffTs;
+
+    async function seedCategory(catName, defaults){
+      const hasAny = products.some(p => p.category === catName);
+      if(!hasAny && defaults.length){
+        const batch = db.batch();
+        defaults.forEach(([name, medida]) => {
+          const ref = db.collection("products").doc();
+          batch.set(ref, { name, medida, category: catName });
+        });
+        await batch.commit();
+        return true;
+      }
+      return false;
+    }
+    // Las 3 categorías por defecto se revisan/siembran en paralelo,
+    // ya que son independientes entre sí.
+    const seededAny = (await Promise.all([
+      seedCategory("Productos de limpieza", DEFAULT_CLEANING),
+      seedCategory("Mantenimiento", DEFAULT_MAINTENANCE),
+      seedCategory("Bebidas", DEFAULT_BEVERAGES)
+    ])).some(Boolean);
+
+    // Solo se vuelve a pedir la lista de productos si realmente se
+    // sembró algo nuevo (caso raro, típicamente solo la primera vez).
+    if(seededAny){
+      const refreshedProd = await db.collection("products").get();
+      products = refreshedProd.docs.map(d => ({ id: d.id, ...d.data() }));
+    }
+
+    backgroundDataReady = true;
+    // Si la pantalla actual ya estaba esperando estos datos (el empleado
+    // llegó al paso de elegir producto, o se abrió el panel de admin,
+    // antes de que terminara esta carga), se refresca ahora que están.
+    if((view === "form" && (formStep === "producto" || formStep === "lista")) || view === "admin"){
+      render();
+    }
+  }
+
+  // Trae de Firestore los movimientos anteriores a lo que ya está cargado
+  // en memoria (ver RECENT_MOVEMENTS_DAYS / movementsLoadedSinceTs), para
+  // cuando el admin filtra por una fecha "Desde" más vieja que eso. Si el
+  // rango pedido ya está cubierto, no hace ningún pedido de más.
+  async function ensureMovementsLoadedFrom(desdeTs){
+    const neededFrom = desdeTs === null ? 0 : desdeTs;
+    if(movementsLoadedSinceTs === null || neededFrom >= movementsLoadedSinceTs) return false;
+    const snap = await db.collection("movements")
+      .where("ts", ">=", neededFrom)
+      .where("ts", "<", movementsLoadedSinceTs)
+      .get();
+    const existingIds = new Set(movements.map(m => m.id));
+    snap.docs.forEach(d => {
+      if(!existingIds.has(d.id)) movements.push({ id: d.id, ...d.data() });
+    });
+    movementsLoadedSinceTs = neededFrom;
+    return true;
   }
 
   async function saveConfig(){
@@ -828,6 +894,10 @@
     if(mov) await registerDeletedMovement(mov);
   }
   async function deleteAllMovements(){
+    // "Borrar todos" tiene que borrar TODO el historial, no solo lo que
+    // esté cargado en memoria (que puede ser nada más que los últimos
+    // RECENT_MOVEMENTS_DAYS días). Se completa la carga si hace falta.
+    await ensureMovementsLoadedFrom(0);
     const all = movements.slice();
     for(let i=0;i<all.length;i+=400){
       const chunk = all.slice(i, i+400);
@@ -836,6 +906,7 @@
       await batch.commit();
     }
     movements = [];
+    movementsLoadedSinceTs = 0; // ya no queda nada más viejo por traer
     // "Borrar todos" no cuenta como borrado individual: se resetea por
     // completo el contador de movimientos borrados por empleado.
     const statsSnap = await db.collection("deletedMovStats").get();
@@ -978,6 +1049,20 @@
 
     if(formStep === "producto" && !selectedCategory) formStep = "categoria";
     if(formStep === "cantidad" && !selectedProductId) formStep = "categoria";
+
+    // Los pasos "producto" y "lista" necesitan products/movements, que se
+    // cargan en segundo plano (ver loadBackgroundData). Si el empleado
+    // llega hasta acá antes de que termine esa carga (muy rápido tocando
+    // botones), se espera con un cartel en vez de mostrar datos a medias.
+    if((formStep === "producto" || formStep === "lista") && !backgroundDataReady){
+      app.innerHTML = `
+        ${topbarWizard("Un momento...")}
+        <section><div class="card"><div class="empty">Cargando productos y movimientos...</div></div></section>
+      `;
+      document.getElementById("logoutBtn").onclick = doLogout;
+      whenBackgroundDataReady(() => { if(view === "form") render(); });
+      return;
+    }
 
     if(formStep === "producto") renderFormProducto(allowedCats);
     else if(formStep === "cantidad") renderFormCantidad();
@@ -1246,6 +1331,17 @@
   }
 
   function renderAdmin(){
+    // El panel de admin (movimientos, resumen, productos, etc.) necesita
+    // products/movements, que se cargan en segundo plano. Si se llega
+    // acá antes de que termine esa carga, se espera con un cartel.
+    if(!backgroundDataReady){
+      app.innerHTML = `
+        <div class="topbar"><h1>Administración</h1><p class="sub">Cargando datos...</p></div>
+        <section><div class="card"><div class="empty">Cargando productos y movimientos, un momento...</div></div></section>
+      `;
+      whenBackgroundDataReady(() => { if(view === "admin") render(); });
+      return;
+    }
     app.innerHTML = `
       <div class="topbar">
         <div class="row">
@@ -1270,7 +1366,22 @@
       </section>
     `;
     document.getElementById("logoutAdmin").onclick = () => { view="login"; clearSession(); render(); };
-    document.getElementById("exportAllBtn").onclick = () => {
+    document.getElementById("exportAllBtn").onclick = async () => {
+      const btn = document.getElementById("exportAllBtn");
+      const originalText = btn.textContent;
+      // "Exportar todo" tiene que incluir el historial completo de
+      // movimientos, no solo los últimos 60 días que están en memoria.
+      if(movementsLoadedSinceTs > 0){
+        btn.textContent = "Cargando historial completo...";
+        try{
+          await ensureMovementsLoadedFrom(0);
+        }catch(err){
+          alert("No se pudo traer el historial completo: " + (err.message || err));
+          btn.textContent = originalText;
+          return;
+        }
+        btn.textContent = originalText;
+      }
       const movRows = movements.slice().sort((a,b)=>a.ts-b.ts);
       const movAoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Timestamp"]];
       movRows.forEach(m => movAoa.push([fmtDate(m.ts), m.employeeName, m.category||"", m.product, m.qty, m.area||"", m.ts]));
@@ -1355,21 +1466,36 @@
         </div>
       </div>
     `;
-    function getFiltered(){
+    async function getFiltered(){
       const fe = document.getElementById("fEmp").value;
       const fc = document.getElementById("fCat").value;
       const fd = document.getElementById("fDesde").value;
       const fh = document.getElementById("fHasta").value;
       const desdeTs = fd ? new Date(fd+"T00:00:00").getTime() : null;
       const hastaTs = fh ? new Date(fh+"T23:59:59.999").getTime() : null;
+      if(desdeTs !== null && desdeTs < movementsLoadedSinceTs){
+        await ensureMovementsLoadedFrom(desdeTs);
+      }
       return movements
         .filter(m => (fe==="Todos"||m.employeeName===fe) && (fc==="Todas"||m.category===fc)
           && (desdeTs===null || m.ts >= desdeTs) && (hastaTs===null || m.ts <= hastaTs))
         .sort((a,b)=>b.ts-a.ts);
     }
-    function drawRows(){
-      const rows = getFiltered();
-      document.getElementById("movTbody").innerHTML = rows.length ? rows.map(m=>`
+    async function drawRows(){
+      const fd = document.getElementById("fDesde").value;
+      const desdeTsCheck = fd ? new Date(fd+"T00:00:00").getTime() : null;
+      const tbody = document.getElementById("movTbody");
+      if(desdeTsCheck !== null && desdeTsCheck < movementsLoadedSinceTs){
+        tbody.innerHTML = `<tr><td colspan="6"><div class="empty">Cargando movimientos de ese rango de fechas...</div></td></tr>`;
+      }
+      let rows;
+      try{
+        rows = await getFiltered();
+      }catch(err){
+        tbody.innerHTML = `<tr><td colspan="6"><div class="msg error">No se pudo cargar ese rango: ${esc(err.message||err)}</div></td></tr>`;
+        return;
+      }
+      tbody.innerHTML = rows.length ? rows.map(m=>`
         <tr>
           <td>${fmtDate(m.ts)}</td><td>${esc(m.employeeName)}</td><td>${esc(m.category||"")}</td>
           <td>${esc(m.product)}</td><td class="estado-reponer">-${m.qty}</td>
@@ -1400,15 +1526,22 @@
     };
     drawRows();
 
-    document.getElementById("exportBtn").onclick = () => {
+    document.getElementById("exportBtn").onclick = async () => {
+      const rows = await getFiltered();
       const aoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Timestamp"]];
-      getFiltered().slice().sort((a,b)=>a.ts-b.ts).forEach(m =>
+      rows.slice().sort((a,b)=>a.ts-b.ts).forEach(m =>
         aoa.push([fmtDate(m.ts), m.employeeName, m.category||"", m.product, m.qty, m.area||"", m.ts])
       );
       exportWorkbook([{name:"Movimientos", rows: aoa}], "movimientos_stock.xlsx");
     };
 
     document.getElementById("deleteAllBtn").onclick = async () => {
+      const btn = document.getElementById("deleteAllBtn");
+      // Hay que conocer el total real (no solo lo cargado en memoria)
+      // antes de avisar cuántos movimientos se van a borrar.
+      btn.disabled = true;
+      await ensureMovementsLoadedFrom(0);
+      btn.disabled = false;
       if(!movements.length){ alert("No hay movimientos cargados para borrar."); return; }
       if(!confirm(`Vas a borrar TODOS los movimientos registrados (${movements.length} en total). Esta acción no se puede deshacer. ¿Continuar?`)) return;
       const typed = prompt('Para confirmar, escribí BORRAR (en mayúsculas):');
@@ -1457,21 +1590,37 @@
       </div>
     `;
 
-    function getFiltered(){
+    async function getFiltered(){
       const fe = document.getElementById("rEmp").value;
       const fc = document.getElementById("rCat").value;
       const fd = document.getElementById("rDesde").value;
       const fh = document.getElementById("rHasta").value;
       const desdeTs = fd ? new Date(fd+"T00:00:00").getTime() : null;
       const hastaTs = fh ? new Date(fh+"T23:59:59.999").getTime() : null;
+      if(desdeTs !== null && desdeTs < movementsLoadedSinceTs){
+        await ensureMovementsLoadedFrom(desdeTs);
+      }
       return movements.filter(m => (fe==="Todos"||m.employeeName===fe) && (fc==="Todas"||m.category===fc)
         && (desdeTs===null || m.ts >= desdeTs) && (hastaTs===null || m.ts <= hastaTs));
     }
 
-    function drawSummary(){
-      const summary = buildProductSummary(getFiltered());
+    async function drawSummary(){
+      const fd = document.getElementById("rDesde").value;
+      const desdeTsCheck = fd ? new Date(fd+"T00:00:00").getTime() : null;
+      const tbody = document.getElementById("resumenTbody");
+      if(desdeTsCheck !== null && desdeTsCheck < movementsLoadedSinceTs){
+        tbody.innerHTML = `<tr><td colspan="3"><div class="empty">Cargando movimientos de ese rango de fechas...</div></td></tr>`;
+      }
+      let filteredRows;
+      try{
+        filteredRows = await getFiltered();
+      }catch(err){
+        tbody.innerHTML = `<tr><td colspan="3"><div class="msg error">No se pudo cargar ese rango: ${esc(err.message||err)}</div></td></tr>`;
+        return;
+      }
+      const summary = buildProductSummary(filteredRows);
       if(!summary.length){
-        document.getElementById("resumenTbody").innerHTML = `<tr><td colspan="3"><div class="empty">Sin retiros para este filtro.</div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="3"><div class="empty">Sin retiros para este filtro.</div></td></tr>`;
         return;
       }
       const byCat = {};
@@ -1487,7 +1636,7 @@
           rowsHtml += `<tr><td>${esc(s.product)}</td><td>${s.count}</td><td><strong>${s.total}</strong></td></tr>`;
         });
       });
-      document.getElementById("resumenTbody").innerHTML = rowsHtml;
+      tbody.innerHTML = rowsHtml;
     }
 
     ["rEmp","rCat","rDesde","rHasta"].forEach(id=>{
@@ -1500,8 +1649,9 @@
     };
     drawSummary();
 
-    document.getElementById("resumenExportBtn").onclick = () => {
-      const summary = buildProductSummary(getFiltered())
+    document.getElementById("resumenExportBtn").onclick = async () => {
+      const filteredRows = await getFiltered();
+      const summary = buildProductSummary(filteredRows)
         .sort((a,b)=> (a.category||"").localeCompare(b.category||"") || a.product.localeCompare(b.product));
       const aoa = [["Categoría","Producto","Cantidad de retiros","Total retirado"]];
       summary.forEach(s => aoa.push([s.category||"", s.product, s.count, s.total]));
@@ -1550,11 +1700,14 @@
       </div>
     `;
 
-    function getFiltered(){
+    async function getFiltered(){
       const fd = document.getElementById("eDesde").value;
       const fh = document.getElementById("eHasta").value;
       const desdeTs = fd ? new Date(fd+"T00:00:00").getTime() : null;
       const hastaTs = fh ? new Date(fh+"T23:59:59.999").getTime() : null;
+      if(desdeTs !== null && desdeTs < movementsLoadedSinceTs){
+        await ensureMovementsLoadedFrom(desdeTs);
+      }
       return movements.filter(m => (desdeTs===null || m.ts >= desdeTs) && (hastaTs===null || m.ts <= hastaTs));
     }
 
@@ -1584,8 +1737,19 @@
       `).join("");
     }
 
-    function draw(){
-      const rows = getFiltered();
+    async function draw(){
+      const fd = document.getElementById("eDesde").value;
+      const desdeTsCheck = fd ? new Date(fd+"T00:00:00").getTime() : null;
+      if(desdeTsCheck !== null && desdeTsCheck < movementsLoadedSinceTs){
+        document.getElementById("eStatGrid").innerHTML = `<div class="empty" style="width:100%;">Cargando movimientos de ese rango de fechas...</div>`;
+      }
+      let rows;
+      try{
+        rows = await getFiltered();
+      }catch(err){
+        document.getElementById("eStatGrid").innerHTML = `<div class="msg error" style="width:100%;">No se pudo cargar ese rango: ${esc(err.message||err)}</div>`;
+        return;
+      }
       const totalMov = rows.length;
       const totalUnidades = rows.reduce((s,m)=>s+m.qty,0);
       const empleadosActivos = new Set(rows.map(m=>m.employeeName)).size;
