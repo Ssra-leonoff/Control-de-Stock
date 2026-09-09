@@ -35,9 +35,15 @@
      siendo la única barrera entre empleados y el panel de admin.)
   =========================================================================
 -->
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<!-- Los SDK de Firebase pesan bastante. Se piden acá con "preload" para que
+     empiecen a descargarse en paralelo mientras el navegador sigue
+     leyendo el resto de la página, pero los <script> que realmente los
+     ejecutan están movidos al principio del <body> (ver más abajo). Así
+     el mensaje "Cargando..." aparece de inmediato en vez de que la
+     pantalla quede en blanco esperando que bajen los SDK. -->
+<link rel="preload" as="script" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js">
+<link rel="preload" as="script" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js">
+<link rel="preload" as="script" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js">
 <!-- La librería de Excel (xlsx) ya no se carga acá: pesa bastante y solo
      hace falta para exportar/importar, así que se carga bajo demanda
      (ver ensureXLSXLoaded) para no frenar el arranque de la app. -->
@@ -93,6 +99,7 @@
     width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:var(--radius-sm);font-size:16px;background:var(--bg);color:var(--ink);margin-bottom:14px;transition:border-color .15s ease, box-shadow .15s ease, background .15s ease;font-family:inherit;
   }
   select:focus, input:focus{outline:none;border-color:var(--violet);background:#fff;box-shadow:0 0 0 4px rgba(108,92,231,.14);}
+  input.input-alert{border-color:var(--red);box-shadow:0 0 0 4px rgba(228,72,59,.14);}
 
   .btn{width:100%;padding:15px;border-radius:14px;border:none;font-size:15px;font-weight:700;cursor:pointer;transition:transform .12s ease, box-shadow .18s ease, opacity .15s ease, background .2s ease;font-family:inherit;letter-spacing:.1px;}
   .btn:active{transform:scale(.97);}
@@ -225,6 +232,14 @@
 </head>
 <body>
 <div id="app"><div class="empty" style="padding:40px 20px;">Cargando...</div></div>
+
+<!-- Estos 3 <script> quedaron acá (en vez del <head>) para que el navegador
+     ya haya pintado el "Cargando..." de arriba antes de pararse a
+     ejecutarlos. Gracias al preload del <head>, para cuando el parser
+     llega hasta acá ya vienen bastante (o del todo) descargados. -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 
 <script>
 (function(){
@@ -845,14 +860,24 @@
     restrictPinInput(document.getElementById("pinInput"));
     document.getElementById("loginBtn").onclick = () => {
       const empId = document.getElementById("empSelect").value;
-      const pin = document.getElementById("pinInput").value.trim();
+      const pinInput = document.getElementById("pinInput");
+      const pin = pinInput.value.trim();
       const emp = employees.find(e=>e.id===empId);
       const msg = document.getElementById("loginMsg");
+      if(pin === ""){
+        // No se escribió nada: se marca el campo y se avisa, pero esto
+        // NO cuenta como intento fallido (no se toca registerFailedAttempt).
+        msg.innerHTML = `<div class="msg info">Escribí tu PIN para ingresar.</div>`;
+        pinInput.classList.add("input-alert");
+        pinInput.focus();
+        pinInput.addEventListener("input", () => pinInput.classList.remove("input-alert"), { once:true });
+        return;
+      }
       if(emp && isEmployeeLocked(emp.id)){
         msg.innerHTML = `<div class="msg error">Usuario bloqueado por 5 intentos fallidos seguidos. Pedile a un administrador que lo desbloquee.</div>`;
         return;
       }
-      if(!emp || pin === "" || pin !== emp.pin){
+      if(!emp || pin !== emp.pin){
         if(emp){
           const attempt = registerFailedAttempt(emp.id);
           if(attempt.locked){
