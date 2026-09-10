@@ -385,6 +385,7 @@
   let areaValue = "";
   let areaSelected = ""; // "Venta" | "Dirigentes" | "Otro" | "" — solo se usa para la categoría Bebidas
   let lastMovSuccess = false;
+  let lastAperturaSuccess = false;
 
   // Manejo del botón/gesto "atrás" del celular dentro del asistente de
   // retiro: si estás avanzado (producto/cantidad/lista), atrás te lleva
@@ -1273,16 +1274,17 @@
   }
 
   // Paso 2: lista de productos de la categoría elegida, en botones grandes.
+  // Para la categoría "Desayunador" es la misma pantalla y el mismo estilo
+  // de botones, solo que la lista sale de "desayunoProductos" (sin medida)
+  // y al tocar uno se pasa a confirmar la apertura (ver renderFormCantidad).
   function renderFormProducto(allowedCats){
-    // La categoría "Desayunador" usa la misma pantalla de elegir producto
-    // que el resto, pero con otra mecánica: en vez de pasar a cantidad/área,
-    // tocar el producto registra la apertura al instante (ver
-    // renderFormProductoDesayunador).
-    if(selectedCategory === "Desayunador"){ renderFormProductoDesayunador(); return; }
+    const esDesayunador = selectedCategory === "Desayunador";
     const reqCount = {};
     movements.forEach(m => { reqCount[m.product] = (reqCount[m.product]||0) + 1; });
-    const prodsInCat = products.filter(p=>p.category===selectedCategory)
-      .sort((a,b)=> (reqCount[b.name]||0) - (reqCount[a.name]||0) || a.name.localeCompare(b.name,"es",{sensitivity:"base"}));
+    const prodsInCat = esDesayunador
+      ? desayunoProductos.slice().sort((a,b)=> a.name.localeCompare(b.name,"es",{sensitivity:"base"}))
+      : products.filter(p=>p.category===selectedCategory)
+          .sort((a,b)=> (reqCount[b.name]||0) - (reqCount[a.name]||0) || a.name.localeCompare(b.name,"es",{sensitivity:"base"}));
 
     app.innerHTML = `
       ${topbarWizard(selectedCategory)}
@@ -1292,9 +1294,9 @@
           ${prodsInCat.length ? prodsInCat.map(p=>`
             <button type="button" class="prod-card" data-id="${esc(p.id)}">
               <span>${esc(p.name)}</span>
-              <span class="prod-card-medida">${esc(p.medida)}</span>
+              <span class="prod-card-medida">${esDesayunador ? "Registrar apertura" : esc(p.medida)}</span>
             </button>
-          `).join("") : `<div class="empty">No hay productos cargados en esta categoría.</div>`}
+          `).join("") : `<div class="empty">${esDesayunador ? "Todavía no hay productos configurados. Pedile a un administrador que los cargue." : "No hay productos cargados en esta categoría."}</div>`}
         </div>
       </section>
     `;
@@ -1312,69 +1314,12 @@
     });
   }
 
-  // Paso 2 (variante Desayunador): en vez de elegir cantidad y área, tocar
-  // un producto registra la apertura al instante (no se registra consumo
-  // por huésped, solo "se terminó, abrí uno nuevo"). Se queda en este mismo
-  // paso para poder registrar varias aperturas seguidas, mostrando debajo
-  // las últimas aperturas propias.
-  function renderFormProductoDesayunador(){
-    const misAperturas = aperturas
-      .filter(a => a.employeeId === currentUser.id)
-      .sort((a,b)=>b.ts-a.ts)
-      .slice(0,8);
-
-    app.innerHTML = `
-      ${topbarWizard("Desayunador")}
-      <section>
-        <button type="button" class="wizard-back" id="backToCat">← Volver a categorías</button>
-        <div class="card">
-          <h2>Tocá el producto que se terminó</h2>
-          <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
-            Se guarda la fecha y hora automáticamente. No hace falta anotar cantidades.
-          </p>
-          <div class="prod-list" id="desayList">
-            ${desayunoProductos.length ? desayunoProductos.map(p=>`
-              <button type="button" class="prod-card" data-id="${esc(p.id)}" data-name="${esc(p.name)}">
-                <span>🥐 ${esc(p.name)}</span>
-                <span class="prod-card-medida">Registrar apertura</span>
-              </button>
-            `).join("") : `<div class="empty">Todavía no hay productos configurados. Pedile a un administrador que los cargue.</div>`}
-          </div>
-        </div>
-        <div class="card">
-          <h2>Tus últimas aperturas</h2>
-          <div id="misAperturas">
-            ${misAperturas.length ? misAperturas.map(a => `
-              <div class="movrow">
-                <div><div>${esc(a.product)}</div></div>
-                <div class="meta">${fmtDate(a.ts)}</div>
-              </div>
-            `).join("") : `<div class="empty">Todavía no registraste aperturas.</div>`}
-          </div>
-        </div>
-      </section>
-    `;
-    document.getElementById("logoutBtn").onclick = doLogout;
-    document.getElementById("backToCat").onclick = () => { formStep = "categoria"; render(); };
-    Array.from(document.querySelectorAll("#desayList .prod-card")).forEach(b=>{
-      b.onclick = async () => {
-        Array.from(document.querySelectorAll("#desayList .prod-card")).forEach(x=>x.disabled=true);
-        const name = b.dataset.name;
-        try{
-          const ap = await addApertura(name);
-          showToast(`Apertura registrada: ${name} — ${fmtDate(ap.ts)}`, "ok");
-          render();
-        }catch(err){
-          showToast("No se pudo registrar: " + (err.message || err), "error");
-          Array.from(document.querySelectorAll("#desayList .prod-card")).forEach(x=>x.disabled=false);
-        }
-      };
-    });
-  }
-
   // Paso 3: cuántos retira, con botones grandes de + y -, y el cartel de
   // "Registrar movimiento" ya mismo abajo (sin un paso de confirmación aparte).
+  // Para la categoría "Desayunador" no hay cantidad ni área: se pasa a
+  // renderFormConfirmarApertura, que solo pide confirmar el producto.
   function renderFormCantidad(){
+    if(selectedCategory === "Desayunador"){ renderFormConfirmarApertura(); return; }
     const prod = products.find(p=>p.id===selectedProductId);
     if(!prod){ formStep = "categoria"; render(); return; }
     const esBebidas = prod.category === "Bebidas";
@@ -1473,8 +1418,56 @@
     };
   }
 
+  // Paso 4 (variante Desayunador): pantalla simple de confirmación. No hay
+  // cantidad ni área: solo se pregunta si se quiere registrar la apertura
+  // del producto elegido, y al confirmar se guarda con fecha/hora automática.
+  function renderFormConfirmarApertura(){
+    const prod = desayunoProductos.find(p=>p.id===selectedProductId);
+    if(!prod){ formStep = "categoria"; render(); return; }
+    app.innerHTML = `
+      ${topbarWizard(selectedCategory)}
+      <section>
+        <button type="button" class="wizard-back" id="backToProd">← Volver a productos</button>
+        <div class="card" style="text-align:center;">
+          <h2 style="font-size:17px;">¿Desea registrar la apertura de:</h2>
+          <p style="font-size:23px;font-weight:800;color:var(--violet-deep);margin:6px 0 0;">${esc(prod.name)}</p>
+        </div>
+        <button type="button" class="confirm-giant" id="confirmAperturaBtn">REGISTRAR APERTURA</button>
+        <div id="confirmMsg" style="padding:0 20px;"></div>
+      </section>
+    `;
+    document.getElementById("logoutBtn").onclick = doLogout;
+    document.getElementById("backToProd").onclick = () => { formStep = "producto"; render(); };
+    document.getElementById("confirmAperturaBtn").onclick = async () => {
+      const btn = document.getElementById("confirmAperturaBtn");
+      const msg = document.getElementById("confirmMsg");
+      btn.disabled = true;
+      btn.textContent = "Guardando...";
+      try{
+        const ap = await addApertura(prod.name);
+        btn.classList.add("done");
+        btn.textContent = "✓ REGISTRADO";
+        showToast(`${prod.name}: apertura registrada correctamente`, "ok");
+      }catch(err){
+        msg.innerHTML = `<div class="msg error">No se pudo guardar: ${esc(err.message||err)}</div>`;
+        btn.disabled = false;
+        btn.textContent = "REGISTRAR APERTURA";
+        return;
+      }
+      setTimeout(() => {
+        selectedProductId = null;
+        lastAperturaSuccess = true;
+        formStep = "lista";
+        render();
+      }, 700);
+    };
+  }
+
   // Paso 5: lista de movimientos, con opción de arrancar un nuevo retiro.
+  // Para la categoría "Desayunador" muestra en cambio las aperturas propias
+  // (ver renderFormListaAperturas).
   function renderFormLista(){
+    if(selectedCategory === "Desayunador"){ renderFormListaAperturas(); return; }
     const misMovs = getMisMovs();
     const showSuccess = lastMovSuccess;
     lastMovSuccess = false;
@@ -1537,6 +1530,41 @@
     }
   }
 
+  // Paso 5 (variante Desayunador): en vez de movimientos, lista de aperturas
+  // propias, con el cartel "Listo, producto registrado" tras confirmar una.
+  function renderFormListaAperturas(){
+    const misAperturas = aperturas
+      .filter(a => a.employeeId === currentUser.id)
+      .sort((a,b)=>b.ts-a.ts)
+      .slice(0,8);
+    const showSuccess = lastAperturaSuccess;
+    lastAperturaSuccess = false;
+    app.innerHTML = `
+      ${topbarWizard("Desayunador")}
+      <section>
+        ${showSuccess ? `<div class="success-banner">✓ Listo, producto registrado</div>` : ""}
+        <button type="button" class="btn btn-primary" id="nuevaAperturaBtn" style="margin-bottom:16px;">+ Registrar otra apertura</button>
+        <div class="card">
+          <h2>Tus últimas aperturas</h2>
+          <div id="misAperturas">
+            ${misAperturas.length ? misAperturas.map(a => `
+              <div class="movrow">
+                <div><div>${esc(a.product)}</div></div>
+                <div class="meta">${fmtDate(a.ts)}</div>
+              </div>
+            `).join("") : `<div class="empty">Todavía no registraste aperturas.</div>`}
+          </div>
+        </div>
+      </section>
+    `;
+    document.getElementById("logoutBtn").onclick = doLogout;
+    document.getElementById("nuevaAperturaBtn").onclick = () => {
+      selectedProductId = null;
+      formStep = "producto";
+      render();
+    };
+  }
+
   // =======================================================================
   // ADMIN
   // =======================================================================
@@ -1597,7 +1625,7 @@
           <button data-tab="estadisticas" class="${adminTab==='estadisticas'?'active':''}">Estadísticas</button>
           <button data-tab="productos" class="${adminTab==='productos'?'active':''}">Productos</button>
           <button data-tab="empleados" class="${adminTab==='empleados'?'active':''}">Empleados</button>
-          <button data-tab="desayunador" class="${adminTab==='desayunador'?'active':''}">🥐 Desayunador</button>
+          <button data-tab="desayunador" class="${adminTab==='desayunador'?'active':''}">Desayunador</button>
         </div>
         <div id="adminContent"></div>
       </section>
@@ -2222,9 +2250,9 @@
           Cada empleado necesita su nombre y un PIN propio para poder registrar movimientos.
           El rol determina qué categorías puede ver (eso se configura por categoría, en la pestaña
           Productos). "Todas las categorías" deja al empleado sin restricción. El rol Desayunador
-          usa el mismo asistente que los demás roles: al elegir la categoría 🥐 Desayunador,
-          en vez de cantidad y área, registra directamente la apertura de cada producto
-          (ver también la pestaña 🥐 Desayunador, con el historial y las estadísticas).
+          usa el mismo asistente que los demás roles: al elegir la categoría Desayunador, en vez
+          de cantidad y área, se confirma y registra directamente la apertura de cada producto
+          (ver también la pestaña Desayunador, con el historial y las estadísticas).
         </p>
         <div id="empList"></div>
         <button class="btn btn-secondary" id="addEmpBtn" style="margin-top:8px;">+ Agregar empleado</button>
@@ -2315,7 +2343,7 @@
   }
 
   // =======================================================================
-  // ADMIN > 🥐 DESAYUNADOR — historial de aperturas, estadísticas y la
+  // ADMIN > DESAYUNADOR — historial de aperturas, estadísticas y la
   // lista configurable de productos. Acá el administrador ve TODO
   // (todas las empleadas, todos los productos, sin restricción).
   // =======================================================================
