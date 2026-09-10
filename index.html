@@ -455,17 +455,6 @@
     if(parts.length === 1) return parts[0];
     return parts.slice(0,-1).join(", ") + " y " + parts[parts.length-1];
   }
-  // Versión redondeada, en lenguaje natural, para la línea de "Interpretación".
-  function fmtRoughFrequency(ms){
-    if(ms === null || ms === undefined || isNaN(ms)) return "";
-    const days = ms / 86400000;
-    if(days >= 1){
-      const r = Math.round(days);
-      return `cada ${r} día${r===1?"":"s"}`;
-    }
-    const hours = Math.max(1, Math.round(ms / 3600000));
-    return `cada ${hours} hora${hours===1?"":"s"}`;
-  }
   // Versión decimal para la tabla comparativa ("Cada 1,9 días").
   function fmtFrequencyDecimal(ms){
     if(ms === null || ms === undefined || isNaN(ms)) return "Datos insuficientes";
@@ -480,32 +469,44 @@
     const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), day = String(d.getDate()).padStart(2,"0");
     return `${y}-${m}-${day}`;
   }
-  // Dado un array de aperturas (de UN producto), calcula cantidad, primera
-  // y última apertura, y a partir de los intervalos entre aperturas
-  // consecutivas: promedio, mediana y aperturas por día/semana/mes.
-  // Si hay menos de 2 aperturas no hay ningún intervalo que promediar:
-  // se devuelve avgMs/medianMs/perDay/perWeek/perMonth en null en vez de
-  // inventar un número, para que la interfaz muestre "Datos insuficientes".
+  // Dado un array de aperturas (de UN producto), calcula:
+  //  - count: cantidad de registros REALES (nunca se infiere ninguno extra).
+  //  - avgMs/medianMs: promedio y mediana del intervalo entre aperturas
+  //    consecutivas. Es un dato informativo aparte ("cuánto suele pasar
+  //    entre una apertura y otra"), y NUNCA se usa para calcular
+  //    aperturas/día, semana o mes. Con menos de 2 aperturas no hay ningún
+  //    intervalo que promediar, así que quedan en null ("Datos insuficientes").
+  //  - perDay: aperturas/día = cantidad real de registros ÷ cantidad de
+  //    días (calendario, hora local) que tienen al menos un registro. Por
+  //    ejemplo, 2 aperturas el mismo día dan perDay=2, sin importar que
+  //    hayan estado separadas por solo 35 minutos (antes eso se calculaba
+  //    mal, extrapolando ese intervalo a las 24hs del día).
+  //  - perWeek/perMonth: proyección a partir de ese promedio diario real
+  //    (perDay × 7 y perDay × 30), no de una apertura real futura.
+  //  - daysWithData: cantidad de días distintos con al menos un registro,
+  //    para poder mostrar "Basado en N día(s) de registros".
   function computeAperturaStats(rows){
     const sorted = rows.slice().sort((a,b)=>a.ts-b.ts);
     const count = sorted.length;
-    if(count === 0) return { count:0, first:null, last:null, avgMs:null, medianMs:null, perDay:null, perWeek:null, perMonth:null };
+    if(count === 0) return { count:0, first:null, last:null, avgMs:null, medianMs:null, perDay:null, perWeek:null, perMonth:null, daysWithData:0 };
     const first = sorted[0].ts, last = sorted[sorted.length-1].ts;
+
+    let avgMs = null, medianMs = null;
     const intervals = [];
     for(let i=1;i<sorted.length;i++) intervals.push(sorted[i].ts - sorted[i-1].ts);
-    let avgMs = null, medianMs = null, perDay = null, perWeek = null, perMonth = null;
     if(intervals.length){
       avgMs = intervals.reduce((s,v)=>s+v,0) / intervals.length;
       const sortedInt = intervals.slice().sort((a,b)=>a-b);
       const mid = Math.floor(sortedInt.length/2);
       medianMs = sortedInt.length % 2 ? sortedInt[mid] : (sortedInt[mid-1]+sortedInt[mid]) / 2;
-      if(avgMs > 0){
-        perDay = 86400000 / avgMs;
-        perWeek = perDay * 7;
-        perMonth = perDay * 30;
-      }
     }
-    return { count, first, last, avgMs, medianMs, perDay, perWeek, perMonth };
+
+    const daysWithData = new Set(sorted.map(r => toDateInputValue(new Date(r.ts)))).size;
+    const perDay = count / daysWithData;
+    const perWeek = perDay * 7;
+    const perMonth = perDay * 30;
+
+    return { count, first, last, avgMs, medianMs, perDay, perWeek, perMonth, daysWithData };
   }
   // Resuelve un preset de período ("hoy", "7d", "30d", "mes", "mesant",
   // "custom") a un rango {desde, hasta} en timestamps (ms), en hora local.
@@ -2638,7 +2639,7 @@
             </div>
           `;
         }
-        const suficiente = stats.count >= 2;
+        const intervalSuficiente = stats.count >= 2;
         return `
           <div class="card">
             <h2>${esc(name.toUpperCase())}</h2>
@@ -2647,13 +2648,16 @@
               <div class="stat-card"><div class="num" style="font-size:14px;">${esc(fmtDate(stats.first))}</div><div class="lbl">Primera apertura</div></div>
               <div class="stat-card"><div class="num" style="font-size:14px;">${esc(fmtDate(stats.last))}</div><div class="lbl">Última apertura</div></div>
             </div>
-            <p style="font-size:13px;margin:6px 0;"><strong>Promedio entre aperturas:</strong> ${suficiente ? esc(fmtDuration(stats.avgMs)) : "Datos insuficientes"}</p>
-            <p style="font-size:13px;margin:6px 0;"><strong>Mediana entre aperturas:</strong> ${suficiente ? esc(fmtDuration(stats.medianMs)) : "Datos insuficientes"}</p>
-            ${suficiente ? `<p style="font-size:13px;margin:6px 0;color:var(--ink-soft);">Interpretación: "Se abre aproximadamente ${esc(fmtRoughFrequency(stats.avgMs))}."</p>` : ""}
+            <p style="font-size:13px;margin:6px 0;"><strong>Promedio entre aperturas:</strong> ${intervalSuficiente ? esc(fmtDuration(stats.avgMs)) : "Datos insuficientes"}</p>
+            <p style="font-size:13px;margin:6px 0;"><strong>Mediana entre aperturas:</strong> ${intervalSuficiente ? esc(fmtDuration(stats.medianMs)) : "Datos insuficientes"}</p>
+            <p style="font-size:13px;margin:6px 0;color:var(--ink-soft);">
+              Interpretación: "Promedio actual: ${stats.perDay.toFixed(2).replace(".",",")} apertura${Math.abs(stats.perDay-1)<0.005?"":"s"} por día."
+              Basado en ${stats.daysWithData} día${stats.daysWithData===1?"":"s"} de registros.
+            </p>
             <div class="stat-grid" style="margin-top:10px;">
-              <div class="stat-card"><div class="num">${suficiente ? stats.perDay.toFixed(2) : "—"}</div><div class="lbl">Aperturas / día</div></div>
-              <div class="stat-card"><div class="num">${suficiente ? stats.perWeek.toFixed(1) : "—"}</div><div class="lbl">Aperturas / semana</div></div>
-              <div class="stat-card"><div class="num">${suficiente ? stats.perMonth.toFixed(1) : "—"}</div><div class="lbl">Aperturas / mes</div></div>
+              <div class="stat-card"><div class="num">${stats.perDay.toFixed(2)}</div><div class="lbl">Aperturas / día</div></div>
+              <div class="stat-card"><div class="num">${stats.perWeek.toFixed(1)}</div><div class="lbl">Proyección / semana</div></div>
+              <div class="stat-card"><div class="num">${stats.perMonth.toFixed(1)}</div><div class="lbl">Proyección / mes</div></div>
             </div>
           </div>
         `;
