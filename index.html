@@ -317,7 +317,13 @@
   // Lista por defecto de productos configurables para la categoría Desayunador.
   // Cada uno representa una caja/envase/paquete que la empleada abre
   // cuando se termina el anterior (no se registra consumo por huésped).
-  const DEFAULT_DESAYUNO = ["Café","Té","Leche","Jugo","Cereales","Galletitas","Pan","Mermelada"];
+  // La medida es el detalle que se ve a la derecha en la lista de productos
+  // (igual que "medida" en el resto de las categorías): cuántas unidades
+  // trae el paquete/caja que se abre.
+  const DEFAULT_DESAYUNO = [
+    ["Café","Paquete"],["Té","Caja x25"],["Leche","Sachet"],["Jugo","Caja"],
+    ["Cereales","Caja"],["Galletitas","Paquete"],["Pan","Bolsa"],["Mermelada","Frasco"]
+  ];
 
   // Mapa legado, solo se usa una vez para migrar datos viejos donde
   // "categories" era un simple array de nombres (sin roles asociados).
@@ -919,15 +925,28 @@
 
     if(desayProdSnap.empty){
       const batch = db.batch();
-      const refs = DEFAULT_DESAYUNO.map(name => {
+      const refs = DEFAULT_DESAYUNO.map(([name, medida]) => {
         const ref = db.collection("desayunoProductos").doc();
-        batch.set(ref, { name });
+        batch.set(ref, { name, medida });
         return ref;
       });
       await batch.commit();
-      desayunoProductos = refs.map((ref, i) => ({ id: ref.id, name: DEFAULT_DESAYUNO[i] }));
+      desayunoProductos = refs.map((ref, i) => ({ id: ref.id, name: DEFAULT_DESAYUNO[i][0], medida: DEFAULT_DESAYUNO[i][1] }));
     }else{
       desayunoProductos = desayProdSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Migración: productos de desayuno cargados antes de que existiera el
+      // campo "medida" (solo tenían nombre). Se completan con un valor por
+      // defecto para que la lista de productos siempre pueda mostrar algo
+      // a la derecha, y el administrador lo puede ajustar después.
+      const sinMedida = desayunoProductos.filter(p => !p.medida);
+      if(sinMedida.length){
+        const batch = db.batch();
+        sinMedida.forEach(p => {
+          p.medida = "Paquete";
+          batch.update(db.collection("desayunoProductos").doc(p.id), { medida: "Paquete" });
+        });
+        await batch.commit();
+      }
     }
 
     async function seedCategory(catName, defaults){
@@ -1017,21 +1036,21 @@
     const ref = await db.collection("movements").add(mov);
     movements.push({ id: ref.id, ...mov });
   }
-  async function addDesayunoProducto(name){
-    const ref = await db.collection("desayunoProductos").add({ name });
-    desayunoProductos.push({ id: ref.id, name });
+  async function addDesayunoProducto(name, medida){
+    const ref = await db.collection("desayunoProductos").add({ name, medida });
+    desayunoProductos.push({ id: ref.id, name, medida });
   }
-  async function updateDesayunoProducto(id, name){
-    await db.collection("desayunoProductos").doc(id).update({ name });
+  async function updateDesayunoProducto(id, data){
+    await db.collection("desayunoProductos").doc(id).update(data);
   }
   async function deleteDesayunoProducto(id){
     await db.collection("desayunoProductos").doc(id).delete();
     desayunoProductos = desayunoProductos.filter(p => p.id !== id);
   }
-  // Registra una apertura: guarda automáticamente quién la hizo y la
-  // fecha/hora exacta (ts = Date.now()).
+  // Registra una apertura: guarda automáticamente quién la hizo, la categoría
+  // y la fecha/hora exacta (ts = Date.now()), igual que un movimiento normal.
   async function addApertura(product){
-    const ap = { product, employeeId: currentUser.id, employeeName: currentUser.name, ts: Date.now() };
+    const ap = { product, category: "Desayunador", employeeId: currentUser.id, employeeName: currentUser.name, ts: Date.now() };
     const ref = await db.collection("aperturas").add(ap);
     aperturas.push({ id: ref.id, ...ap });
     return aperturas[aperturas.length-1];
@@ -1275,8 +1294,9 @@
 
   // Paso 2: lista de productos de la categoría elegida, en botones grandes.
   // Para la categoría "Desayunador" es la misma pantalla y el mismo estilo
-  // de botones, solo que la lista sale de "desayunoProductos" (sin medida)
-  // y al tocar uno se pasa a confirmar la apertura (ver renderFormCantidad).
+  // de botones, con la medida a la derecha igual que las demás categorías;
+  // la lista sale de "desayunoProductos" en vez de "products", y al tocar
+  // uno se pasa a confirmar la apertura (ver renderFormCantidad).
   function renderFormProducto(allowedCats){
     const esDesayunador = selectedCategory === "Desayunador";
     const reqCount = {};
@@ -1294,7 +1314,7 @@
           ${prodsInCat.length ? prodsInCat.map(p=>`
             <button type="button" class="prod-card" data-id="${esc(p.id)}">
               <span>${esc(p.name)}</span>
-              <span class="prod-card-medida">${esDesayunador ? "Registrar apertura" : esc(p.medida)}</span>
+              <span class="prod-card-medida">${esc(p.medida||"")}</span>
             </button>
           `).join("") : `<div class="empty">${esDesayunador ? "Todavía no hay productos configurados. Pedile a un administrador que los cargue." : "No hay productos cargados en esta categoría."}</div>`}
         </div>
@@ -1429,8 +1449,8 @@
       <section>
         <button type="button" class="wizard-back" id="backToProd">← Volver a productos</button>
         <div class="card" style="text-align:center;">
-          <h2 style="font-size:17px;">¿Desea registrar la apertura de:</h2>
-          <p style="font-size:23px;font-weight:800;color:var(--violet-deep);margin:6px 0 0;">${esc(prod.name)}</p>
+          <p style="font-size:14px;color:var(--ink-soft);font-weight:600;margin:0 0 8px;">¿Desea registrar la apertura de:</p>
+          <h2 style="font-size:22px;margin:0;">${esc(prod.name)}</h2>
         </div>
         <button type="button" class="confirm-giant" id="confirmAperturaBtn">REGISTRAR APERTURA</button>
         <div id="confirmMsg" style="padding:0 20px;"></div>
@@ -1547,12 +1567,15 @@
         <div class="card">
           <h2>Tus últimas aperturas</h2>
           <div id="misAperturas">
-            ${misAperturas.length ? misAperturas.map(a => `
+            ${misAperturas.length ? misAperturas.map(a => {
+              const puedeBorrar = (Date.now() - a.ts) < SELF_DELETE_WINDOW_MS;
+              return `
               <div class="movrow">
-                <div><div>${esc(a.product)}</div></div>
-                <div class="meta">${fmtDate(a.ts)}</div>
+                <div><div>${esc(a.product)}</div><div class="meta">${esc(a.employeeName||currentUser.name)} · ${esc(a.category||"Desayunador")} · ${fmtDate(a.ts)}</div></div>
+                ${puedeBorrar ? `<button class="small-btn small-btn-danger" data-id="${esc(a.id)}" data-action="delMiApertura">Borrar</button>` : ""}
               </div>
-            `).join("") : `<div class="empty">Todavía no registraste aperturas.</div>`}
+            `;
+            }).join("") : `<div class="empty">Todavía no registraste aperturas.</div>`}
           </div>
         </div>
       </section>
@@ -1563,6 +1586,32 @@
       formStep = "producto";
       render();
     };
+
+    Array.from(document.querySelectorAll("[data-action='delMiApertura']")).forEach(btn=>{
+      btn.onclick = async () => {
+        const ap = aperturas.find(a => a.id === btn.dataset.id);
+        if(!ap || (Date.now() - ap.ts) >= SELF_DELETE_WINDOW_MS){
+          showToast("Ya pasaron los 5 minutos: pedile a un administrador que lo borre", "error");
+          render();
+          return;
+        }
+        if(!confirm("¿Borrar este movimiento? Esta acción no se puede deshacer.")) return;
+        btn.disabled = true;
+        await deleteApertura(btn.dataset.id);
+        showToast("Movimiento borrado", "ok");
+        render();
+      };
+    });
+
+    // Vuelve a renderizar cuando se cumplan los 5 minutos de la apertura más
+    // reciente, para que el botón "Borrar" desaparezca solo sin recargar.
+    if(misAperturas.length){
+      const msRestantes = SELF_DELETE_WINDOW_MS - (Date.now() - misAperturas[0].ts);
+      if(msRestantes > 0 && msRestantes < SELF_DELETE_WINDOW_MS){
+        clearTimeout(window.__misAperturasTimer);
+        window.__misAperturasTimer = setTimeout(() => { if(view==="form" && formStep==="lista") render(); }, msRestantes + 500);
+      }
+    }
   }
 
   // =======================================================================
@@ -2593,18 +2642,21 @@
         <h2>Productos de desayuno</h2>
         <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
           Esta es la lista que ve la empleada de Desayunador para registrar aperturas.
+          La medida es el detalle que ve a la derecha de cada producto (ej: Paquete, Caja, Sachet).
         </p>
         <div id="desayProdList"></div>
-        <div class="add-cat-row">
+        <div class="prod-row" style="margin-top:10px;">
           <input type="text" id="newDesayProdInput" placeholder="Nuevo producto (ej: Café)">
+          <input type="text" id="newDesayProdMedida" placeholder="Medida" style="max-width:90px;">
           <button class="small-btn" id="addDesayProdBtn">Agregar</button>
         </div>
       </div>
     `;
     function draw(){
       document.getElementById("desayProdList").innerHTML = desayunoProductos.length ? desayunoProductos.map(p=>`
-        <div class="emp-row">
+        <div class="prod-row">
           <input type="text" value="${esc(p.name)}" data-id="${esc(p.id)}" class="desayProdName">
+          <input type="text" value="${esc(p.medida||"")}" data-id="${esc(p.id)}" class="desayProdMedida" style="max-width:90px;">
           <button class="small-btn" data-id="${esc(p.id)}" data-action="delDesayProd">Quitar</button>
         </div>
       `).join("") : `<div class="empty">No hay productos configurados.</div>`;
@@ -2612,9 +2664,17 @@
         inp.onchange = async () => {
           const val = inp.value.trim();
           if(!val) return;
-          await updateDesayunoProducto(inp.dataset.id, val);
+          await updateDesayunoProducto(inp.dataset.id, {name: val});
           const p = desayunoProductos.find(x=>x.id===inp.dataset.id);
           if(p) p.name = val;
+        };
+      });
+      Array.from(document.querySelectorAll(".desayProdMedida")).forEach(inp=>{
+        inp.onchange = async () => {
+          const val = inp.value.trim();
+          await updateDesayunoProducto(inp.dataset.id, {medida: val});
+          const p = desayunoProductos.find(x=>x.id===inp.dataset.id);
+          if(p) p.medida = val;
         };
       });
       Array.from(document.querySelectorAll("[data-action='delDesayProd']")).forEach(btn=>{
@@ -2629,11 +2689,14 @@
     draw();
     document.getElementById("addDesayProdBtn").onclick = async () => {
       const input = document.getElementById("newDesayProdInput");
+      const medidaInput = document.getElementById("newDesayProdMedida");
       const val = input.value.trim();
+      const medida = medidaInput.value.trim() || "Paquete";
       if(!val) return;
       if(desayunoProductos.some(p=>p.name.toLowerCase()===val.toLowerCase())){ alert("Ya existe ese producto."); return; }
-      await addDesayunoProducto(val);
+      await addDesayunoProducto(val, medida);
       input.value = "";
+      medidaInput.value = "";
       draw();
     };
   }
