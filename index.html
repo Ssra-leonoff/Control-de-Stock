@@ -135,7 +135,7 @@
   .emp-row .empName{order:1;flex:1 1 auto;min-width:100px;}
   .emp-row .empPin{order:2;flex:0 0 76px;text-align:center;font-weight:700;letter-spacing:1px;padding-left:6px;padding-right:6px;}
   .emp-row [data-action="del"]{order:3;flex:0 0 auto;}
-  .emp-row .empRole{order:4;flex:1 1 100%;margin-bottom:0;}
+  .emp-row .empCats{order:4;flex:1 1 100%;margin-bottom:0;}
   .small-btn{padding:9px 12px;font-size:12px;font-weight:600;border-radius:20px;border:1.5px solid var(--line);background:#fff;cursor:pointer;color:var(--ink-soft);transition:background .15s ease, color .15s ease, border-color .15s ease;}
   .small-btn:hover{background:var(--bg-soft);border-color:var(--violet);color:var(--violet-deep);}
   .small-btn-danger{color:var(--red);border-color:var(--red);}
@@ -225,9 +225,9 @@
   .empty{color:var(--ink-soft);font-size:13px;text-align:center;padding:20px 0;}
   .add-cat-row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
   .add-cat-row input{margin-bottom:0;flex:1;}
-  .cat-role-checks{display:flex;gap:10px;flex-wrap:wrap;flex:1 1 100%;margin:2px 0 2px;}
-  .cat-role-check{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:var(--ink-soft);}
-  .cat-role-check input{width:auto;margin:0;}
+  .multiselect-checks{display:flex;gap:10px;flex-wrap:wrap;flex:1 1 100%;margin:2px 0 2px;}
+  .multiselect-check{display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:var(--ink-soft);}
+  .multiselect-check input{width:auto;margin:0;}
 </style>
 </head>
 <body>
@@ -258,10 +258,10 @@
   const NOT_CONFIGURED = firebaseConfig.apiKey === "TU_API_KEY";
 
   const DEFAULT_CATEGORIES = [
-    {name:"Productos de limpieza", roles:[]},
-    {name:"Bebidas", roles:[]},
-    {name:"Mantenimiento", roles:["Mantenimiento"]},
-    {name:"Desayunador", roles:["Desayunador"]}
+    {name:"Productos de limpieza"},
+    {name:"Bebidas"},
+    {name:"Mantenimiento"},
+    {name:"Desayunador"}
   ];
 
   const DEFAULT_CLEANING = [
@@ -300,19 +300,12 @@
     ["Gonzalo","2013"],["Jonn","2014"]
   ];
 
-  // Roles de empleado disponibles. Qué categorías ve cada rol se define
-  // por categoría (ver categories[].roles), no acá: cada categoría guarda
-  // la lista de roles que pueden verla. Si esa lista viene vacía, la
-  // categoría es visible para todos los roles.
-  // "Desayunador" es un rol como cualquier otro: usa exactamente el mismo
-  // asistente categoría → producto → registrar que el resto de los roles.
-  // Lo único distinto es la categoría "Desayunador" en sí (ver más abajo):
-  // ahí, en vez de cantidad + área, la mecánica es "registrar apertura"
-  // (ver renderFormProducto).
-  const ROLES = ["Mucama","Mantenimiento","Recepción","Desayunador"];
-  // Roles que se usan para restringir la visibilidad de categorías de
-  // stock (pestaña Productos > Categorías).
-  const CATEGORY_ROLES = ["Mucama","Mantenimiento","Recepción","Desayunador"];
+  // "Desayunador" es una categoría como cualquier otra: el empleado que la
+  // tenga asignada usa exactamente el mismo asistente categoría → producto →
+  // registrar que para el resto de las categorías. Lo único distinto es
+  // la categoría "Desayunador" en sí (ver más abajo): ahí, en vez de
+  // cantidad + área, la mecánica es "registrar apertura" (ver
+  // renderFormProducto).
 
   // Lista por defecto de productos configurables para la categoría Desayunador.
   // Cada uno representa una caja/envase/paquete que la empleada abre
@@ -325,19 +318,27 @@
     ["Cereales","Caja"],["Galletitas","Paquete"],["Pan","Bolsa"],["Mermelada","Frasco"]
   ];
 
-  // Mapa legado, solo se usa una vez para migrar datos viejos donde
-  // "categories" era un simple array de nombres (sin roles asociados).
+  // =======================================================================
+  // MIGRACIÓN DE DATOS VIEJOS (sistema de roles, discontinuado)
+  // =======================================================================
+  // Todo lo de acá abajo solo se usa una vez, al cargar instalaciones que
+  // todavía tengan el sistema de roles viejo, para calcular qué categorías
+  // veía cada empleado con ese sistema y dejárselas asignadas de forma
+  // explícita (ver migración de empleados en loadAll). No se vuelve a
+  // guardar ni "roles" (en categorías) ni "role" (en empleados).
+  const LEGACY_CATEGORY_ROLES = ["Mucama","Mantenimiento","Recepción","Desayunador"];
   const LEGACY_ROLE_CATEGORIES = {
     "Mucama": ["Productos de limpieza","Bebidas"],
     "Mantenimiento": ["Productos de limpieza","Bebidas","Mantenimiento"],
     "Recepción": ["Productos de limpieza","Bebidas"]
   };
-  // Convierte una categoría vieja (string) al nuevo formato {name, roles}.
+  // Convierte una categoría vieja (string) al formato legado {name, roles},
+  // usado solo para la migración de empleados de abajo.
   function migrateLegacyCategory(name){
-    const roles = CATEGORY_ROLES.filter(r => (LEGACY_ROLE_CATEGORIES[r]||[]).includes(name));
+    const roles = LEGACY_CATEGORY_ROLES.filter(r => (LEGACY_ROLE_CATEGORIES[r]||[]).includes(name));
     // Si no matcheaba ningún rol conocido (categoría personalizada vieja),
     // la dejamos visible para todos en vez de ocultarla por accidente.
-    return { name, roles: roles.length === CATEGORY_ROLES.length ? [] : roles };
+    return { name, roles: roles.length === LEGACY_CATEGORY_ROLES.length ? [] : roles };
   }
 
   let db = null;
@@ -538,13 +539,13 @@
     };
   }
 
-  // Devuelve las categorías (nombres) visibles para un empleado según su rol.
-  // Un empleado sin rol asignado ve todas las categorías. Con rol asignado,
-  // ve las categorías que no tengan restricción (roles vacío) o que incluyan
-  // su rol en la lista de roles permitidos de esa categoría.
-  function getAllowedCategories(role){
-    if(!role) return categories.map(c=>c.name);
-    return categories.filter(c => !c.roles || c.roles.length===0 || c.roles.includes(role)).map(c=>c.name);
+  // Devuelve las categorías (nombres) que puede ver un empleado, según la
+  // lista de categorías que tenga asignadas directamente (categorias).
+  // Un empleado sin categorías asignadas no ve ninguna, hasta que un
+  // administrador se las asigne en la sección Empleados.
+  function getAllowedCategories(categorias){
+    if(!categorias || !categorias.length) return [];
+    return categories.filter(c => categorias.includes(c.name)).map(c=>c.name);
   }
 
   // Muestra una notificación flotante (toast) en la parte inferior de la pantalla
@@ -628,7 +629,7 @@
         if(cat && !categories.some(c=>c.name===cat) && !newCats.includes(cat)) newCats.push(cat);
       });
       if(newCats.length){
-        categories.push(...newCats.map(n=>({name:n, roles:[]})));
+        categories.push(...newCats.map(n=>({name:n})));
         await saveConfig();
         addedCats = newCats.length;
       }
@@ -662,10 +663,11 @@
       rows.forEach(r=>{
         const name = String(r["Nombre"]||"").trim();
         const pin = String(r["PIN"]||"").trim();
-        const role = String(r["Rol"]||"").trim();
+        const catsStr = String(r["Categorías"]||"").trim();
+        const categorias = catsStr ? catsStr.split(",").map(s=>s.trim()).filter(Boolean) : [];
         if(!name || existingNames.has(name)) return;
         existingNames.add(name);
-        toAdd.push({name, pin, role});
+        toAdd.push({name, pin, categorias});
       });
       for(let i=0;i<toAdd.length;i+=400){
         const chunk = toAdd.slice(i, i+400);
@@ -839,35 +841,42 @@
         db.collection("loginAttempts").get()
       ]);
 
+      // "loadedCategories" puede traer temporalmente un campo "roles" viejo
+      // (sistema de roles, discontinuado) si la instalación ya tenía datos
+      // guardados con ese formato. Se usa más abajo SOLO para migrar a los
+      // empleados que todavía tengan "role" en vez de "categorias"; después
+      // se descarta y "categories" queda siempre limpio (solo {name}).
+      let loadedCategories;
+      let categoriesNeedSave = !configSnap.exists;
       if(!configSnap.exists){
         config = { adminPin: "1982", stock: {} };
-        categories = DEFAULT_CATEGORIES.map(c=>({...c}));
-        await configRef.set({ adminPin: config.adminPin, stock: config.stock, categories });
+        loadedCategories = DEFAULT_CATEGORIES.map(c=>({...c}));
       }else{
         const data = configSnap.data();
         config = { adminPin: data.adminPin || "1982", stock: data.stock || {} };
         if(data.categories && data.categories.length){
-          // Compatibilidad: si vienen como strings (formato viejo), migrarlas
-          // al nuevo formato {name, roles} usando el mapeo legado.
-          categories = data.categories.map(c => typeof c === "string" ? migrateLegacyCategory(c) : c);
+          // Compatibilidad: si vienen como strings (formato muy viejo),
+          // migrarlas al formato legado {name, roles} usando el mapeo fijo.
+          loadedCategories = data.categories.map(c => typeof c === "string" ? migrateLegacyCategory(c) : c);
         }else{
-          categories = DEFAULT_CATEGORIES.map(c=>({...c}));
+          loadedCategories = DEFAULT_CATEGORIES.map(c=>({...c}));
         }
-        // Migración: instalaciones ya existentes tenían a Desayunador como
-        // rol especial fuera del sistema de categorías. Si todavía no tienen
-        // la categoría "Desayunador" guardada, se agrega ahora para que el
-        // empleado con ese rol la vea en el asistente normal.
-        if(!categories.some(c=>c.name==="Desayunador")){
-          categories.push({name:"Desayunador", roles:["Desayunador"]});
-          await saveConfig();
-        }
+      }
+      // Migración: instalaciones ya existentes tenían a Desayunador como
+      // rol especial fuera del sistema de categorías. Si todavía no tienen
+      // la categoría "Desayunador" guardada, se agrega ahora (con el rol
+      // legado, para que la migración de empleados de abajo preserve el
+      // acceso tal cual era antes) para que el asistente normal la muestre.
+      if(!loadedCategories.some(c=>c.name==="Desayunador")){
+        loadedCategories.push({name:"Desayunador", roles:["Desayunador"]});
+        categoriesNeedSave = true;
       }
 
       if(empSnap.empty){
         const batch = db.batch();
         DEFAULT_EMPLOYEES.forEach(([name, pin]) => {
           const ref = db.collection("employees").doc();
-          batch.set(ref, { name, pin, role: "" });
+          batch.set(ref, { name, pin, categorias: [] });
         });
         await batch.commit();
         const refreshed = await db.collection("employees").get();
@@ -875,6 +884,29 @@
       }else{
         employees = empSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       }
+
+      // Migración: empleados que todavía tienen el campo "role" (sistema de
+      // roles, discontinuado) en vez de "categorias" pasan a tener la lista
+      // explícita de categorías que veían antes, calculada con las reglas
+      // viejas (categoría visible si no tenía roles asignados, o si su rol
+      // estaba en la lista de roles permitidos de esa categoría).
+      const employeesToMigrate = employees.filter(e => e.categorias === undefined);
+      employeesToMigrate.forEach(e => {
+        e.categorias = e.role
+          ? loadedCategories.filter(c => !c.roles || c.roles.length===0 || c.roles.includes(e.role)).map(c=>c.name)
+          : loadedCategories.map(c=>c.name);
+      });
+      if(employeesToMigrate.length){
+        const batch = db.batch();
+        employeesToMigrate.forEach(e => batch.update(db.collection("employees").doc(e.id), { categorias: e.categorias }));
+        await batch.commit();
+      }
+
+      // Las categorías ya no usan "roles" (sistema discontinuado): se
+      // guardan limpias, solo con el nombre.
+      if(loadedCategories.some(c => c.roles !== undefined)) categoriesNeedSave = true;
+      categories = loadedCategories.map(c => ({name: c.name}));
+      if(categoriesNeedSave) await saveConfig();
 
       loginAttempts = {};
       laSnap.docs.forEach(d => { loginAttempts[d.id] = d.data(); });
@@ -886,7 +918,7 @@
       if(session && session.type === "user"){
         const emp = employees.find(e => e.id === session.empId);
         if(emp){
-          currentUser = { id: emp.id, name: emp.name, role: emp.role || "" };
+          currentUser = { id: emp.id, name: emp.name, categorias: emp.categorias || [] };
           view = "form";
         }else{
           clearSession();
@@ -1010,9 +1042,9 @@
       adminPin: config.adminPin, stock: config.stock, categories
     });
   }
-  async function addEmployee(name, pin, role){
-    const ref = await db.collection("employees").add({ name, pin, role: role || "" });
-    employees.push({ id: ref.id, name, pin, role: role || "" });
+  async function addEmployee(name, pin, categorias){
+    const ref = await db.collection("employees").add({ name, pin, categorias: categorias || [] });
+    employees.push({ id: ref.id, name, pin, categorias: categorias || [] });
   }
   async function updateEmployee(id, data){
     await db.collection("employees").doc(id).update(data);
@@ -1171,7 +1203,7 @@
         return;
       }
       await clearFailedAttempts(emp.id);
-      currentUser = { id: emp.id, name: emp.name, role: emp.role || "" };
+      currentUser = { id: emp.id, name: emp.name, categorias: emp.categorias || [] };
       view = "form";
       formStep = "categoria";
       selectedCategory = null;
@@ -1223,13 +1255,13 @@
   }
 
   function renderForm(){
-    const allowedCats = getAllowedCategories(currentUser.role);
+    const allowedCats = getAllowedCategories(currentUser.categorias);
     if(!allowedCats.length){
       app.innerHTML = `
         ${topbarWizard("Registrar retiro de stock")}
         <section>
           <div class="card">
-            <div class="msg info">Todavía no tenés categorías asignadas. Pedile a un administrador que te asigne un rol en la sección Empleados.</div>
+            <div class="msg info">Todavía no tenés categorías asignadas. Pedile a un administrador que te asigne categorías en la sección Empleados.</div>
           </div>
         </section>
       `;
@@ -1711,8 +1743,8 @@
       });
       products.filter(p=>!categories.some(c=>c.name===p.category)).forEach(p => prodAoa.push([p.category||"", p.name, p.medida]));
 
-      const empAoa = [["Nombre","PIN","Rol"]];
-      employees.forEach(e => empAoa.push([e.name, e.pin, e.role || ""]));
+      const empAoa = [["Nombre","PIN","Categorías"]];
+      employees.forEach(e => empAoa.push([e.name, e.pin, (e.categorias||[]).join(", ")]));
 
       exportWorkbook([
         {name:"Movimientos", rows: movAoa},
@@ -2116,32 +2148,36 @@
   }
 
   function renderAdminProductos(content){
+    // Los productos de la categoría "Desayunador" se cargan y editan aparte,
+    // en la pestaña Desayunador (viven en otra colección, sin medida ligada
+    // a "products"). Por eso se la excluye de los selectores de esta sección,
+    // para no ofrecer un lugar donde cargar un producto que después no se
+    // vería en el asistente del empleado.
+    const catsForProductos = categories.filter(c => c.name !== "Desayunador");
     content.innerHTML = `
       <div class="card">
         <h2>Categorías</h2>
         <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
-          Marcá qué roles pueden ver cada categoría al registrar un retiro. Si no marcás ninguno,
-          la categoría queda visible para todos los roles.
+          Estas son las categorías disponibles para registrar retiros. Qué categorías puede ver
+          cada empleado se configura por empleado, en la pestaña Empleados.
         </p>
         <div id="catList"></div>
         <div class="add-cat-row">
           <input type="text" id="newCatInput" placeholder="Nueva categoría" style="flex:1 1 100%;">
-          <div class="cat-role-checks">
-            ${CATEGORY_ROLES.map(r=>`
-              <label class="cat-role-check"><input type="checkbox" class="newCatRole" value="${esc(r)}"> ${esc(r)}</label>
-            `).join("")}
-          </div>
           <button class="small-btn" id="addCatBtn">Agregar</button>
         </div>
       </div>
       <div class="card">
         <h2>Productos</h2>
+        <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
+          Los productos de la categoría Desayunador no están acá: se cargan en la pestaña Desayunador.
+        </p>
         <div class="filters">
           <div style="flex:1;min-width:150px;">
             <label>Filtrar por categoría</label>
             <select id="prodFilterCat" style="margin-bottom:0;">
               <option value="">Todas las categorías (${products.length})</option>
-              ${categories.map(c=>`<option value="${esc(c.name)}" ${c.name===adminProdFilterCat?"selected":""}>${esc(c.name)} (${products.filter(p=>p.category===c.name).length})</option>`).join("")}
+              ${catsForProductos.map(c=>`<option value="${esc(c.name)}" ${c.name===adminProdFilterCat?"selected":""}>${esc(c.name)} (${products.filter(p=>p.category===c.name).length})</option>`).join("")}
             </select>
           </div>
           <div style="flex:1;min-width:150px;">
@@ -2156,25 +2192,22 @@
         <div class="prod-row" style="margin-top:10px;">
           <input type="text" id="newProdName" placeholder="Nombre del producto">
           <input type="text" id="newProdMedida" placeholder="Medida (ej: 5L)">
-          <select id="newProdCat">${categories.map(c=>`<option value="${esc(c.name)}" ${c.name===adminProdFilterCat?"selected":""}>${esc(c.name)}</option>`).join("")}</select>
+          <select id="newProdCat">${catsForProductos.map(c=>`<option value="${esc(c.name)}" ${c.name===adminProdFilterCat?"selected":""}>${esc(c.name)}</option>`).join("")}</select>
           <button class="small-btn" id="addProdBtn">Agregar</button>
         </div>
       </div>
     `;
     function drawCats(){
-      document.getElementById("catList").innerHTML = categories.map((c,i)=>`
+      document.getElementById("catList").innerHTML = categories.map((c,i)=>{
+        const esDesayunador = c.name === "Desayunador";
+        return `
         <div class="emp-row">
-          <input type="text" value="${esc(c.name)}" data-idx="${i}" class="catName">
-          <button class="small-btn" data-idx="${i}" data-action="delCat">Quitar</button>
-          <div class="cat-role-checks" style="order:5;flex:1 1 100%;">
-            ${CATEGORY_ROLES.map(r=>`
-              <label class="cat-role-check">
-                <input type="checkbox" class="catRole" data-idx="${i}" value="${esc(r)}" ${(c.roles||[]).includes(r)?"checked":""}> ${esc(r)}
-              </label>
-            `).join("")}
-          </div>
+          <input type="text" value="${esc(c.name)}" data-idx="${i}" class="catName" ${esDesayunador?"disabled title=\"Esta categoría es fija: sus productos se administran en la pestaña Desayunador\"":""}>
+          ${esDesayunador ? `` : `<button class="small-btn" data-idx="${i}" data-action="delCat">Quitar</button>`}
+          ${esDesayunador ? `<div style="order:5;flex:1 1 100%;font-size:11.5px;color:var(--ink-soft);margin-top:2px;">Sus productos se cargan en la pestaña "Desayunador", no acá.</div>` : ""}
         </div>
-      `).join("");
+      `;
+      }).join("");
       Array.from(document.querySelectorAll(".catName")).forEach(inp=>{
         inp.onchange = async () => {
           const oldName = categories[inp.dataset.idx].name;
@@ -2184,20 +2217,16 @@
           for(const p of affected){ await updateProduct(p.id, {category:newName}); p.category = newName; }
           categories[inp.dataset.idx].name = newName;
           if(adminProdFilterCat === oldName) adminProdFilterCat = newName;
-          await saveConfig();
-          render();
-        };
-      });
-      Array.from(document.querySelectorAll(".catRole")).forEach(chk=>{
-        chk.onchange = async () => {
-          const cat = categories[chk.dataset.idx];
-          cat.roles = cat.roles || [];
-          if(chk.checked){
-            if(!cat.roles.includes(chk.value)) cat.roles.push(chk.value);
-          }else{
-            cat.roles = cat.roles.filter(r=>r!==chk.value);
+          // Los empleados que tenían asignada la categoría con el nombre
+          // viejo pasan a tenerla asignada con el nombre nuevo, para que no
+          // pierdan el acceso solo por el renombre.
+          const affectedEmps = employees.filter(e => (e.categorias||[]).includes(oldName));
+          for(const e of affectedEmps){
+            e.categorias = e.categorias.map(cn => cn===oldName ? newName : cn);
+            await updateEmployee(e.id, {categorias: e.categorias});
           }
           await saveConfig();
+          render();
         };
       });
       Array.from(document.querySelectorAll("[data-action='delCat']")).forEach(btn=>{
@@ -2210,6 +2239,12 @@
           if(!confirm(`¿Está seguro que desea quitar la categoría "${catName}"?`)) return;
           categories.splice(btn.dataset.idx,1);
           if(adminProdFilterCat === catName) adminProdFilterCat = "";
+          // Se le saca la categoría eliminada a los empleados que la tenían asignada.
+          const affectedEmps = employees.filter(e => (e.categorias||[]).includes(catName));
+          for(const e of affectedEmps){
+            e.categorias = e.categorias.filter(cn => cn!==catName);
+            await updateEmployee(e.id, {categorias: e.categorias});
+          }
           await saveConfig();
           render();
         };
@@ -2221,8 +2256,7 @@
       const val = document.getElementById("newCatInput").value.trim();
       if(!val) return;
       if(categories.some(c=>c.name===val)){ alert("Ya existe esa categoría."); return; }
-      const roles = Array.from(document.querySelectorAll(".newCatRole:checked")).map(chk=>chk.value);
-      categories.push({name: val, roles});
+      categories.push({name: val});
       await saveConfig();
       render();
     };
@@ -2297,10 +2331,10 @@
         <h2>Empleados y PIN</h2>
         <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
           Cada empleado necesita su nombre y un PIN propio para poder registrar movimientos.
-          El rol determina qué categorías puede ver (eso se configura por categoría, en la pestaña
-          Productos). "Todas las categorías" deja al empleado sin restricción. El rol Desayunador
-          usa el mismo asistente que los demás roles: al elegir la categoría Desayunador, en vez
-          de cantidad y área, se confirma y registra directamente la apertura de cada producto
+          Marcá qué categorías puede ver ese empleado al registrar un retiro; si no marcás
+          ninguna, no va a ver ninguna categoría hasta que se le asigne al menos una. La
+          categoría Desayunador usa el mismo asistente que las demás: al elegirla, en vez de
+          cantidad y área, se confirma y registra directamente la apertura de cada producto
           (ver también la pestaña Desayunador, con el historial y las estadísticas).
         </p>
         <div id="empList"></div>
@@ -2318,10 +2352,13 @@
           <input type="text" value="${esc(e.name)}" data-idx="${i}" class="empName">
           <input type="tel" inputmode="numeric" maxlength="4" value="${esc(e.pin)}" data-idx="${i}" class="empPin">
           <button class="small-btn" data-idx="${i}" data-action="del">Quitar</button>
-          <select data-idx="${i}" class="empRole">
-            <option value="" ${!e.role?"selected":""}>Todas las categorías</option>
-            ${ROLES.map(r=>`<option value="${esc(r)}" ${e.role===r?"selected":""}>${esc(r)}</option>`).join("")}
-          </select>
+          <div class="multiselect-checks empCats">
+            ${categories.map(c=>`
+              <label class="multiselect-check">
+                <input type="checkbox" class="empCat" data-idx="${i}" value="${esc(c.name)}" ${(e.categorias||[]).includes(c.name)?"checked":""}> ${esc(c.name)}
+              </label>
+            `).join("") || `<span style="font-size:12px;color:var(--ink-soft);">No hay categorías creadas todavía.</span>`}
+          </div>
           ${isEmployeeLocked(e.id) ? `
             <div class="msg error" style="order:5;flex:1 1 100%;display:flex;justify-content:space-between;align-items:center;gap:8px;margin:2px 0 0;">
               <span>🔒 Bloqueado por intentos fallidos</span>
@@ -2353,8 +2390,17 @@
           showToast(`PIN de ${e.name} actualizado a ${newPin}`, "ok");
         });
       });
-      Array.from(document.querySelectorAll(".empRole")).forEach(sel=>{
-        sel.onchange = async () => { const e=employees[sel.dataset.idx]; e.role=sel.value; await updateEmployee(e.id,{role:e.role}); };
+      Array.from(document.querySelectorAll(".empCat")).forEach(chk=>{
+        chk.onchange = async () => {
+          const e = employees[chk.dataset.idx];
+          e.categorias = e.categorias || [];
+          if(chk.checked){
+            if(!e.categorias.includes(chk.value)) e.categorias.push(chk.value);
+          }else{
+            e.categorias = e.categorias.filter(c=>c!==chk.value);
+          }
+          await updateEmployee(e.id, {categorias: e.categorias});
+        };
       });
       Array.from(document.querySelectorAll("[data-action='unlock']")).forEach(btn=>{
         btn.onclick = async () => {
@@ -2377,7 +2423,7 @@
 
     document.getElementById("addEmpBtn").onclick = async () => {
       const n = employees.length + 1;
-      await addEmployee("Nuevo empleado "+n, String(2100+n), "");
+      await addEmployee("Nuevo empleado "+n, String(2100+n), []);
       drawEmpList();
     };
 
