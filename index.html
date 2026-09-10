@@ -540,6 +540,146 @@
     };
   }
 
+  // Resuelve el período de la pestaña Gráfico (Desayunador): "semana" es la
+  // semana calendario actual (lunes a hoy), "mes" es el mes calendario
+  // actual (día 1 a hoy) y "custom" toma las fechas elegidas a mano.
+  function resolveGraficoPeriod(periodKey, customDesde, customHasta){
+    const now = new Date();
+    const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const endOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate(),23,59,59,999).getTime();
+    if(periodKey === "semana"){
+      const diffToMonday = (now.getDay()+6)%7; // lunes=0
+      const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate()-diffToMonday);
+      return { desde: startOfDay(monday), hasta: endOfDay(now) };
+    }
+    if(periodKey === "mes"){
+      return { desde: new Date(now.getFullYear(), now.getMonth(), 1).getTime(), hasta: endOfDay(now) };
+    }
+    // "custom"
+    return {
+      desde: customDesde ? new Date(customDesde+"T00:00:00").getTime() : null,
+      hasta: customHasta ? new Date(customHasta+"T23:59:59.999").getTime() : null
+    };
+  }
+  // Arma la lista de días (YYYY-MM-DD, hora local) entre desdeTs y hastaTs,
+  // ambos inclusive.
+  function buildDayList(desdeTs, hastaTs){
+    const days = [];
+    if(desdeTs==null || hastaTs==null || hastaTs < desdeTs) return days;
+    let d = new Date(desdeTs);
+    d = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const end = new Date(hastaTs);
+    const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+    let guard = 0;
+    while(d.getTime() <= endDay.getTime() && guard < 3660){
+      days.push(toDateInputValue(d));
+      d.setDate(d.getDate()+1);
+      guard++;
+    }
+    return days;
+  }
+  // Agrupa el rango de fechas en como máximo maxBuckets "puntos" para el
+  // gráfico. Con rangos cortos (semana/mes) queda un punto por día; con
+  // rangos personalizados muy largos, agrupa varios días por punto para
+  // que el gráfico se siga leyendo bien.
+  function buildBuckets(desdeTs, hastaTs, maxBuckets){
+    const days = buildDayList(desdeTs, hastaTs);
+    if(!days.length) return [];
+    if(days.length <= maxBuckets) return days.map(dayStr => ({ label: dayStr, dayKeys: [dayStr] }));
+    const bucketSize = Math.ceil(days.length / maxBuckets);
+    const buckets = [];
+    for(let i=0;i<days.length;i+=bucketSize){
+      const slice = days.slice(i, i+bucketSize);
+      buckets.push({ label: slice[0], dayKeys: slice });
+    }
+    return buckets;
+  }
+  // "YYYY-MM-DD" -> "DD/MM" para mostrar en el eje X del gráfico.
+  function fmtBucketLabel(dayStr){
+    const parts = dayStr.split("-");
+    return `${parts[2]}/${parts[1]}`;
+  }
+  // Redondea un máximo hacia arriba a un número "lindo" para las líneas
+  // guía del eje Y (1, 2, 5, 10, 20, 50...).
+  function niceMax(v){
+    if(v <= 4) return 4;
+    const magnitude = Math.pow(10, Math.floor(Math.log10(v)));
+    const residual = v / magnitude;
+    let niceResidual;
+    if(residual <= 1) niceResidual = 1;
+    else if(residual <= 2) niceResidual = 2;
+    else if(residual <= 5) niceResidual = 5;
+    else niceResidual = 10;
+    return niceResidual * magnitude;
+  }
+  // Compara el promedio de aperturas por punto entre la primera y la
+  // segunda mitad del período, para saber si la demanda de un producto
+  // está subiendo, bajando o estable. Devuelve dir: "up"|"down"|"neutral"
+  // y pct: variación porcentual (null si no se puede calcular).
+  function calcTrend(values){
+    if(!values || values.length < 2) return { dir:"neutral", pct:null };
+    const mid = Math.floor(values.length/2);
+    const first = values.slice(0, mid);
+    const second = values.slice(mid);
+    const avg = arr => arr.reduce((s,v)=>s+v,0) / (arr.length||1);
+    const firstAvg = avg(first), secondAvg = avg(second);
+    if(firstAvg === 0 && secondAvg === 0) return { dir:"neutral", pct:0 };
+    if(firstAvg === 0) return { dir:"up", pct:null };
+    const pct = ((secondAvg-firstAvg)/firstAvg) * 100;
+    let dir = "neutral";
+    if(pct > 10) dir = "up";
+    else if(pct < -10) dir = "down";
+    return { dir, pct };
+  }
+  // Arma el SVG del diagrama de área (estilo "Apple vs Banana"): una capa
+  // semitransparente por producto, todas desde la base (0), más línea y
+  // grilla de referencia. buckets: [{label,...}], series: [{name,color,values}].
+  function buildAreaChartSVG(buckets, series){
+    const W = 680, H = 320, ML = 40, MR = 12, MT = 16, MB = 30;
+    const plotW = W-ML-MR, plotH = H-MT-MB;
+    const n = buckets.length;
+    const allValues = series.flatMap(s=>s.values);
+    const maxVal = niceMax(Math.max(1, ...allValues, 0));
+    const xStep = n>1 ? plotW/(n-1) : 0;
+    const xFor = i => n>1 ? ML + i*xStep : ML + plotW/2;
+    const yFor = v => MT + plotH - (Math.min(v,maxVal)/maxVal)*plotH;
+
+    const gridCount = 4;
+    let gridLines = "", gridLabels = "";
+    for(let g=0; g<=gridCount; g++){
+      const v = maxVal * g/gridCount;
+      const y = yFor(v);
+      gridLines += `<line x1="${ML}" y1="${y.toFixed(1)}" x2="${W-MR}" y2="${y.toFixed(1)}" stroke="#DCE3F0" stroke-width="1"/>`;
+      gridLabels += `<text x="${ML-8}" y="${(y+4).toFixed(1)}" text-anchor="end" font-size="11" fill="#5D6B85" font-family="inherit">${Math.round(v)}</text>`;
+    }
+    const labelEvery = Math.max(1, Math.ceil(n/7));
+    let xLabels = "";
+    buckets.forEach((b,i)=>{
+      if(i % labelEvery === 0 || i === n-1){
+        xLabels += `<text x="${xFor(i).toFixed(1)}" y="${H-8}" text-anchor="middle" font-size="10.5" fill="#5D6B85" font-family="inherit">${esc(fmtBucketLabel(b.label))}</text>`;
+      }
+    });
+
+    let areasSVG = "", linesSVG = "";
+    series.forEach(s=>{
+      const pts = s.values.map((v,i)=>`${xFor(i).toFixed(1)},${yFor(v).toFixed(1)}`);
+      const baseY = yFor(0).toFixed(1);
+      const areaPath = `M${ML},${baseY} L${pts.join(" L")} L${xFor(n-1).toFixed(1)},${baseY} Z`;
+      areasSVG += `<path d="${areaPath}" fill="${s.color}" fill-opacity="0.42" stroke="none"/>`;
+      linesSVG += `<path d="M${pts.join(" L")}" fill="none" stroke="${s.color}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>`;
+    });
+
+    return `
+      <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;" xmlns="http://www.w3.org/2000/svg">
+        ${gridLines}
+        ${areasSVG}
+        ${linesSVG}
+        ${gridLabels}
+        ${xLabels}
+      </svg>
+    `;
+  }
+
   // Devuelve las categorías (nombres) que puede ver un empleado, según la
   // lista de categorías que tenga asignadas directamente (categorias).
   // Un empleado sin categorías asignadas no ve ninguna, hasta que un
@@ -2447,6 +2587,7 @@
     content.innerHTML = `
       <div class="tabs" style="margin-bottom:14px;">
         <button data-sub="historial" class="${desayAdminSub==='historial'?'active':''}">Historial de aperturas</button>
+        <button data-sub="grafico" class="${desayAdminSub==='grafico'?'active':''}">Gráfico</button>
         <button data-sub="estadisticas" class="${desayAdminSub==='estadisticas'?'active':''}">Estadísticas</button>
         <button data-sub="productos" class="${desayAdminSub==='productos'?'active':''}">Productos</button>
       </div>
@@ -2457,6 +2598,7 @@
     });
     const sub = content.querySelector("#desaySubContent");
     if(desayAdminSub === "historial") renderDesayHistorial(sub);
+    else if(desayAdminSub === "grafico") renderDesayGrafico(sub);
     else if(desayAdminSub === "estadisticas") renderDesayEstadisticas(sub);
     else renderDesayProductos(sub);
   }
@@ -2558,6 +2700,131 @@
         draw();
       };
     });
+    draw();
+  }
+
+  // --- Gráfico: diagrama de área con la cantidad de aperturas a lo largo
+  // del tiempo (semana actual / mes actual / rango personalizado) de los
+  // productos que se marquen con el check, para ver fácil si la demanda
+  // de cada uno sube o baja. ---
+  const DESAY_GRAFICO_PALETTE = ["#1E4FB0","#B8760A","#0F9D75","#E4483B","#8E44AD","#127C8A","#C2185B","#5D6B85","#D98324","#2F8F46"];
+  function renderDesayGrafico(content){
+    function colorFor(name){
+      const idx = desayunoProductos.findIndex(p=>p.name===name);
+      return DESAY_GRAFICO_PALETTE[(idx<0?0:idx) % DESAY_GRAFICO_PALETTE.length];
+    }
+    content.innerHTML = `
+      <div class="card">
+        <h2>Gráfico · Desayunador</h2>
+        <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
+          Elegí uno o varios productos para ver la cantidad de aperturas a lo largo del tiempo y detectar fácilmente si la demanda subió o bajó.
+        </p>
+        <label>Período</label>
+        <select id="dgPeriod">
+          <option value="semana" selected>Semana (actual)</option>
+          <option value="mes">Mes (actual)</option>
+          <option value="custom">Personalizado</option>
+        </select>
+        <div id="dgCustomRange" style="display:none;">
+          <div class="filters" style="align-items:flex-end;">
+            <div style="flex:1;min-width:130px;"><label style="margin-bottom:4px;">Desde</label><input type="date" id="dgDesde" style="margin-bottom:0;"></div>
+            <div style="flex:1;min-width:130px;"><label style="margin-bottom:4px;">Hasta</label><input type="date" id="dgHasta" style="margin-bottom:0;"></div>
+          </div>
+        </div>
+        <label style="margin-top:${desayunoProductos.length?'2px':'14px'};">Productos a comparar</label>
+        <div class="multiselect-checks" id="dgProdChecks">
+          ${desayunoProductos.map((p,i)=>`
+            <label class="multiselect-check">
+              <input type="checkbox" class="dgProdCheck" value="${esc(p.name)}" ${i===0?"checked":""}>
+              <span style="width:9px;height:9px;border-radius:50%;display:inline-block;background:${colorFor(p.name)};"></span>
+              ${esc(p.name)}
+            </label>
+          `).join("") || `<span style="font-size:12px;color:var(--ink-soft);">No hay productos de desayunador configurados todavía.</span>`}
+        </div>
+      </div>
+      <div class="card">
+        <h2>Aperturas en el tiempo</h2>
+        <div id="dgChartWrap"></div>
+        <p id="dgBucketNote" style="font-size:11px;color:var(--ink-soft);margin:8px 0 0;"></p>
+        <div id="dgLegend" style="margin-top:10px;display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+    `;
+    const periodSel = content.querySelector("#dgPeriod");
+    const customBlock = content.querySelector("#dgCustomRange");
+    periodSel.onchange = () => {
+      customBlock.style.display = periodSel.value === "custom" ? "block" : "none";
+      draw();
+    };
+    content.querySelector("#dgDesde").onchange = draw;
+    content.querySelector("#dgHasta").onchange = draw;
+    Array.from(content.querySelectorAll(".dgProdCheck")).forEach(cb => { cb.onchange = draw; });
+
+    function getRange(){
+      const custom = periodSel.value === "custom";
+      const cd = custom ? content.querySelector("#dgDesde").value : null;
+      const ch = custom ? content.querySelector("#dgHasta").value : null;
+      return resolveGraficoPeriod(periodSel.value, cd, ch);
+    }
+
+    function draw(){
+      const selected = Array.from(content.querySelectorAll(".dgProdCheck")).filter(cb=>cb.checked).map(cb=>cb.value);
+      const wrap = content.querySelector("#dgChartWrap");
+      const legend = content.querySelector("#dgLegend");
+      const note = content.querySelector("#dgBucketNote");
+      if(!selected.length){
+        wrap.innerHTML = `<div class="empty">Seleccioná al menos un producto para ver el gráfico.</div>`;
+        legend.innerHTML = ""; note.textContent = "";
+        return;
+      }
+      const {desde, hasta} = getRange();
+      if(desde===null || hasta===null){
+        wrap.innerHTML = `<div class="empty">Elegí las dos fechas del período personalizado.</div>`;
+        legend.innerHTML = ""; note.textContent = "";
+        return;
+      }
+      const buckets = buildBuckets(desde, hasta, 31);
+      if(!buckets.length){
+        wrap.innerHTML = `<div class="empty">El rango de fechas elegido no es válido.</div>`;
+        legend.innerHTML = ""; note.textContent = "";
+        return;
+      }
+      const series = selected.map(name => {
+        const rows = aperturas.filter(a => a.product===name && a.ts>=desde && a.ts<=hasta);
+        const byDay = {};
+        rows.forEach(a => { const k = toDateInputValue(new Date(a.ts)); byDay[k] = (byDay[k]||0)+1; });
+        const values = buckets.map(b => b.dayKeys.reduce((s,k)=> s + (byDay[k]||0), 0));
+        return { name, color: colorFor(name), values, total: values.reduce((s,v)=>s+v,0) };
+      });
+      wrap.innerHTML = buildAreaChartSVG(buckets, series);
+      const bucketSize = buckets[0].dayKeys.length;
+      note.textContent = bucketSize > 1 ? `Cada punto del gráfico agrupa ${bucketSize} días.` : "";
+      legend.innerHTML = series.map(s => {
+        const trend = calcTrend(s.values);
+        let trendHtml;
+        if(s.total === 0){
+          trendHtml = `<span style="color:var(--ink-soft);">Sin aperturas</span>`;
+        }else if(trend.dir === "up"){
+          trendHtml = `<span style="color:var(--green);font-weight:700;">▲ Subiendo${trend.pct!==null?" "+Math.round(trend.pct)+"%":""}</span>`;
+        }else if(trend.dir === "down"){
+          trendHtml = `<span style="color:var(--red);font-weight:700;">▼ Bajando${trend.pct!==null?" "+Math.round(Math.abs(trend.pct))+"%":""}</span>`;
+        }else{
+          trendHtml = `<span style="color:var(--ink-soft);font-weight:700;">→ Estable</span>`;
+        }
+        return `
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 12px;background:var(--bg);border-radius:12px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="width:11px;height:11px;border-radius:50%;background:${s.color};display:inline-block;flex-shrink:0;"></span>
+              <span style="font-weight:700;font-size:13px;">${esc(s.name)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;">
+              <span style="color:var(--ink-soft);">${s.total} apertura${s.total===1?"":"s"}</span>
+              ${trendHtml}
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
     draw();
   }
 
