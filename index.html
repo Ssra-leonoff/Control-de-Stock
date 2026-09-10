@@ -260,7 +260,8 @@
   const DEFAULT_CATEGORIES = [
     {name:"Productos de limpieza", roles:[]},
     {name:"Bebidas", roles:[]},
-    {name:"Mantenimiento", roles:["Mantenimiento"]}
+    {name:"Mantenimiento", roles:["Mantenimiento"]},
+    {name:"Desayunador", roles:["Desayunador"]}
   ];
 
   const DEFAULT_CLEANING = [
@@ -299,11 +300,24 @@
     ["Gonzalo","2013"],["Jonn","2014"]
   ];
 
-  // Roles de empleado disponibles. Qué categorías ve cada rol ahora se
-  // define por categoría (ver categories[].roles), no acá: cada categoría
-  // guarda la lista de roles que pueden verla. Si esa lista viene vacía,
-  // la categoría es visible para todos los roles.
-  const ROLES = ["Mucama","Mantenimiento","Recepción"];
+  // Roles de empleado disponibles. Qué categorías ve cada rol se define
+  // por categoría (ver categories[].roles), no acá: cada categoría guarda
+  // la lista de roles que pueden verla. Si esa lista viene vacía, la
+  // categoría es visible para todos los roles.
+  // "Desayunador" es un rol como cualquier otro: usa exactamente el mismo
+  // asistente categoría → producto → registrar que el resto de los roles.
+  // Lo único distinto es la categoría "Desayunador" en sí (ver más abajo):
+  // ahí, en vez de cantidad + área, la mecánica es "registrar apertura"
+  // (ver renderFormProducto).
+  const ROLES = ["Mucama","Mantenimiento","Recepción","Desayunador"];
+  // Roles que se usan para restringir la visibilidad de categorías de
+  // stock (pestaña Productos > Categorías).
+  const CATEGORY_ROLES = ["Mucama","Mantenimiento","Recepción","Desayunador"];
+
+  // Lista por defecto de productos configurables para la categoría Desayunador.
+  // Cada uno representa una caja/envase/paquete que la empleada abre
+  // cuando se termina el anterior (no se registra consumo por huésped).
+  const DEFAULT_DESAYUNO = ["Café","Té","Leche","Jugo","Cereales","Galletitas","Pan","Mermelada"];
 
   // Mapa legado, solo se usa una vez para migrar datos viejos donde
   // "categories" era un simple array de nombres (sin roles asociados).
@@ -314,10 +328,10 @@
   };
   // Convierte una categoría vieja (string) al nuevo formato {name, roles}.
   function migrateLegacyCategory(name){
-    const roles = ROLES.filter(r => (LEGACY_ROLE_CATEGORIES[r]||[]).includes(name));
+    const roles = CATEGORY_ROLES.filter(r => (LEGACY_ROLE_CATEGORIES[r]||[]).includes(name));
     // Si no matcheaba ningún rol conocido (categoría personalizada vieja),
     // la dejamos visible para todos en vez de ocultarla por accidente.
-    return { name, roles: roles.length === ROLES.length ? [] : roles };
+    return { name, roles: roles.length === CATEGORY_ROLES.length ? [] : roles };
   }
 
   let db = null;
@@ -326,6 +340,14 @@
   let categories = [];
   let config = { adminPin: "1982", stock: {} };
   let movements = [];
+  // Lista configurable de productos del Desayunador y el historial de
+  // aperturas registradas. A diferencia de "movements" (que se carga solo
+  // de los últimos RECENT_MOVEMENTS_DAYS por volumen), acá se trae todo
+  // el historial completo desde el arranque: el volumen es bajo (unas
+  // pocas aperturas por día, sobre ~8 productos) y las estadísticas
+  // necesitan poder calcular la primera apertura de siempre.
+  let desayunoProductos = [];
+  let aperturas = [];
   let deletedStats = {};
   let deletedStatsLoaded = false; // recién se trae de Firestore cuando hace falta (pestaña Estadísticas)
   // Solo se cargan los movimientos de los últimos N días al arrancar (ver
@@ -354,6 +376,7 @@
   let adminTab = "movimientos";
   let adminProdFilterCat = "";
   let adminProdSortMode = "";
+  let desayAdminSub = "historial"; // sub-pestaña dentro de Admin > Desayunador
 
   // Estado del asistente de retiro paso a paso (categoria -> producto -> cantidad -> lista)
   let formStep = "categoria";
@@ -391,6 +414,7 @@
     if(c.includes("limpieza")) return "🧴";
     if(c.includes("bebida")) return "🥤";
     if(c.includes("mantenimiento")) return "🔧";
+    if(c.includes("desayun")) return "🥐";
     if(c.includes("aliment") || c.includes("comida")) return "🍽️";
     if(c.includes("papel") || c.includes("higien")) return "🧻";
     return "📦";
@@ -405,6 +429,106 @@
     const d = new Date(ts);
     return d.toLocaleDateString("es-AR",{day:"2-digit",month:"2-digit"}) + " " +
            d.toLocaleTimeString("es-AR",{hour:"2-digit",minute:"2-digit"});
+  }
+  // Formatea un intervalo de tiempo como "1 día, 23 horas y 46 minutos",
+  // omitiendo las unidades en cero. Se usa para promedio/mediana entre
+  // aperturas y para el detalle de cada intervalo.
+  function fmtDuration(ms){
+    if(ms === null || ms === undefined || isNaN(ms)) return "Datos insuficientes";
+    let totalMinutes = Math.round(Math.max(0, ms) / 60000);
+    const days = Math.floor(totalMinutes / 1440);
+    totalMinutes -= days * 1440;
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes - hours * 60;
+    const parts = [];
+    if(days) parts.push(`${days} día${days===1?"":"s"}`);
+    if(hours) parts.push(`${hours} hora${hours===1?"":"s"}`);
+    if(minutes || parts.length===0) parts.push(`${minutes} minuto${minutes===1?"":"s"}`);
+    if(parts.length === 1) return parts[0];
+    return parts.slice(0,-1).join(", ") + " y " + parts[parts.length-1];
+  }
+  // Versión redondeada, en lenguaje natural, para la línea de "Interpretación".
+  function fmtRoughFrequency(ms){
+    if(ms === null || ms === undefined || isNaN(ms)) return "";
+    const days = ms / 86400000;
+    if(days >= 1){
+      const r = Math.round(days);
+      return `cada ${r} día${r===1?"":"s"}`;
+    }
+    const hours = Math.max(1, Math.round(ms / 3600000));
+    return `cada ${hours} hora${hours===1?"":"s"}`;
+  }
+  // Versión decimal para la tabla comparativa ("Cada 1,9 días").
+  function fmtFrequencyDecimal(ms){
+    if(ms === null || ms === undefined || isNaN(ms)) return "Datos insuficientes";
+    const days = ms / 86400000;
+    if(days >= 1) return `Cada ${days.toFixed(1).replace(".",",")} días`;
+    const hours = ms / 3600000;
+    return `Cada ${hours.toFixed(1).replace(".",",")} horas`;
+  }
+  // Formatea una fecha como YYYY-MM-DD en hora LOCAL (a diferencia de
+  // toISOString, que usa UTC y puede correr el día según el huso horario).
+  function toDateInputValue(d){
+    const y = d.getFullYear(), m = String(d.getMonth()+1).padStart(2,"0"), day = String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${day}`;
+  }
+  // Dado un array de aperturas (de UN producto), calcula cantidad, primera
+  // y última apertura, y a partir de los intervalos entre aperturas
+  // consecutivas: promedio, mediana y aperturas por día/semana/mes.
+  // Si hay menos de 2 aperturas no hay ningún intervalo que promediar:
+  // se devuelve avgMs/medianMs/perDay/perWeek/perMonth en null en vez de
+  // inventar un número, para que la interfaz muestre "Datos insuficientes".
+  function computeAperturaStats(rows){
+    const sorted = rows.slice().sort((a,b)=>a.ts-b.ts);
+    const count = sorted.length;
+    if(count === 0) return { count:0, first:null, last:null, avgMs:null, medianMs:null, perDay:null, perWeek:null, perMonth:null };
+    const first = sorted[0].ts, last = sorted[sorted.length-1].ts;
+    const intervals = [];
+    for(let i=1;i<sorted.length;i++) intervals.push(sorted[i].ts - sorted[i-1].ts);
+    let avgMs = null, medianMs = null, perDay = null, perWeek = null, perMonth = null;
+    if(intervals.length){
+      avgMs = intervals.reduce((s,v)=>s+v,0) / intervals.length;
+      const sortedInt = intervals.slice().sort((a,b)=>a-b);
+      const mid = Math.floor(sortedInt.length/2);
+      medianMs = sortedInt.length % 2 ? sortedInt[mid] : (sortedInt[mid-1]+sortedInt[mid]) / 2;
+      if(avgMs > 0){
+        perDay = 86400000 / avgMs;
+        perWeek = perDay * 7;
+        perMonth = perDay * 30;
+      }
+    }
+    return { count, first, last, avgMs, medianMs, perDay, perWeek, perMonth };
+  }
+  // Resuelve un preset de período ("hoy", "7d", "30d", "mes", "mesant",
+  // "custom") a un rango {desde, hasta} en timestamps (ms), en hora local.
+  function resolveDesayPeriod(periodKey, customDesde, customHasta){
+    const now = new Date();
+    const startOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const endOfDay = d => new Date(d.getFullYear(), d.getMonth(), d.getDate(),23,59,59,999).getTime();
+    if(periodKey === "hoy"){
+      return { desde: startOfDay(now), hasta: endOfDay(now) };
+    }
+    if(periodKey === "7d"){
+      const d = new Date(now); d.setDate(d.getDate()-6);
+      return { desde: startOfDay(d), hasta: endOfDay(now) };
+    }
+    if(periodKey === "30d"){
+      const d = new Date(now); d.setDate(d.getDate()-29);
+      return { desde: startOfDay(d), hasta: endOfDay(now) };
+    }
+    if(periodKey === "mes"){
+      return { desde: new Date(now.getFullYear(), now.getMonth(), 1).getTime(), hasta: endOfDay(now) };
+    }
+    if(periodKey === "mesant"){
+      const firstThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastMonthEnd = new Date(firstThisMonth.getTime() - 1);
+      return { desde: new Date(lastMonthEnd.getFullYear(), lastMonthEnd.getMonth(), 1).getTime(), hasta: endOfDay(lastMonthEnd) };
+    }
+    // "custom"
+    return {
+      desde: customDesde ? new Date(customDesde+"T00:00:00").getTime() : null,
+      hasta: customHasta ? new Date(customHasta+"T23:59:59.999").getTime() : null
+    };
   }
 
   // Devuelve las categorías (nombres) visibles para un empleado según su rol.
@@ -722,6 +846,14 @@
         }else{
           categories = DEFAULT_CATEGORIES.map(c=>({...c}));
         }
+        // Migración: instalaciones ya existentes tenían a Desayunador como
+        // rol especial fuera del sistema de categorías. Si todavía no tienen
+        // la categoría "Desayunador" guardada, se agrega ahora para que el
+        // empleado con ese rol la vea en el asistente normal.
+        if(!categories.some(c=>c.name==="Desayunador")){
+          categories.push({name:"Desayunador", roles:["Desayunador"]});
+          await saveConfig();
+        }
       }
 
       if(empSnap.empty){
@@ -773,13 +905,29 @@
   // mensaje de carga (ver whenBackgroundDataReady).
   async function loadBackgroundData(){
     const cutoffTs = Date.now() - RECENT_MOVEMENTS_DAYS * 24 * 60 * 60 * 1000;
-    const [prodSnap, movSnap] = await Promise.all([
+    const [prodSnap, movSnap, desayProdSnap, aperturasSnap] = await Promise.all([
       db.collection("products").get(),
-      db.collection("movements").where("ts", ">=", cutoffTs).get()
+      db.collection("movements").where("ts", ">=", cutoffTs).get(),
+      db.collection("desayunoProductos").get(),
+      db.collection("aperturas").get()
     ]);
     products = prodSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     movements = movSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     movementsLoadedSinceTs = cutoffTs;
+    aperturas = aperturasSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+    if(desayProdSnap.empty){
+      const batch = db.batch();
+      const refs = DEFAULT_DESAYUNO.map(name => {
+        const ref = db.collection("desayunoProductos").doc();
+        batch.set(ref, { name });
+        return ref;
+      });
+      await batch.commit();
+      desayunoProductos = refs.map((ref, i) => ({ id: ref.id, name: DEFAULT_DESAYUNO[i] }));
+    }else{
+      desayunoProductos = desayProdSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }
 
     async function seedCategory(catName, defaults){
       const hasAny = products.some(p => p.category === catName);
@@ -867,6 +1015,29 @@
   async function addMovement(mov){
     const ref = await db.collection("movements").add(mov);
     movements.push({ id: ref.id, ...mov });
+  }
+  async function addDesayunoProducto(name){
+    const ref = await db.collection("desayunoProductos").add({ name });
+    desayunoProductos.push({ id: ref.id, name });
+  }
+  async function updateDesayunoProducto(id, name){
+    await db.collection("desayunoProductos").doc(id).update({ name });
+  }
+  async function deleteDesayunoProducto(id){
+    await db.collection("desayunoProductos").doc(id).delete();
+    desayunoProductos = desayunoProductos.filter(p => p.id !== id);
+  }
+  // Registra una apertura: guarda automáticamente quién la hizo y la
+  // fecha/hora exacta (ts = Date.now()).
+  async function addApertura(product){
+    const ap = { product, employeeId: currentUser.id, employeeName: currentUser.name, ts: Date.now() };
+    const ref = await db.collection("aperturas").add(ap);
+    aperturas.push({ id: ref.id, ...ap });
+    return aperturas[aperturas.length-1];
+  }
+  async function deleteApertura(id){
+    await db.collection("aperturas").doc(id).delete();
+    aperturas = aperturas.filter(a => a.id !== id);
   }
   async function registerDeletedMovement(mov){
     const key = mov.employeeId || "sin_empleado";
@@ -1103,6 +1274,11 @@
 
   // Paso 2: lista de productos de la categoría elegida, en botones grandes.
   function renderFormProducto(allowedCats){
+    // La categoría "Desayunador" usa la misma pantalla de elegir producto
+    // que el resto, pero con otra mecánica: en vez de pasar a cantidad/área,
+    // tocar el producto registra la apertura al instante (ver
+    // renderFormProductoDesayunador).
+    if(selectedCategory === "Desayunador"){ renderFormProductoDesayunador(); return; }
     const reqCount = {};
     movements.forEach(m => { reqCount[m.product] = (reqCount[m.product]||0) + 1; });
     const prodsInCat = products.filter(p=>p.category===selectedCategory)
@@ -1132,6 +1308,66 @@
         areaSelected = "";
         formStep = "cantidad";
         render();
+      };
+    });
+  }
+
+  // Paso 2 (variante Desayunador): en vez de elegir cantidad y área, tocar
+  // un producto registra la apertura al instante (no se registra consumo
+  // por huésped, solo "se terminó, abrí uno nuevo"). Se queda en este mismo
+  // paso para poder registrar varias aperturas seguidas, mostrando debajo
+  // las últimas aperturas propias.
+  function renderFormProductoDesayunador(){
+    const misAperturas = aperturas
+      .filter(a => a.employeeId === currentUser.id)
+      .sort((a,b)=>b.ts-a.ts)
+      .slice(0,8);
+
+    app.innerHTML = `
+      ${topbarWizard("Desayunador")}
+      <section>
+        <button type="button" class="wizard-back" id="backToCat">← Volver a categorías</button>
+        <div class="card">
+          <h2>Tocá el producto que se terminó</h2>
+          <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
+            Se guarda la fecha y hora automáticamente. No hace falta anotar cantidades.
+          </p>
+          <div class="prod-list" id="desayList">
+            ${desayunoProductos.length ? desayunoProductos.map(p=>`
+              <button type="button" class="prod-card" data-id="${esc(p.id)}" data-name="${esc(p.name)}">
+                <span>🥐 ${esc(p.name)}</span>
+                <span class="prod-card-medida">Registrar apertura</span>
+              </button>
+            `).join("") : `<div class="empty">Todavía no hay productos configurados. Pedile a un administrador que los cargue.</div>`}
+          </div>
+        </div>
+        <div class="card">
+          <h2>Tus últimas aperturas</h2>
+          <div id="misAperturas">
+            ${misAperturas.length ? misAperturas.map(a => `
+              <div class="movrow">
+                <div><div>${esc(a.product)}</div></div>
+                <div class="meta">${fmtDate(a.ts)}</div>
+              </div>
+            `).join("") : `<div class="empty">Todavía no registraste aperturas.</div>`}
+          </div>
+        </div>
+      </section>
+    `;
+    document.getElementById("logoutBtn").onclick = doLogout;
+    document.getElementById("backToCat").onclick = () => { formStep = "categoria"; render(); };
+    Array.from(document.querySelectorAll("#desayList .prod-card")).forEach(b=>{
+      b.onclick = async () => {
+        Array.from(document.querySelectorAll("#desayList .prod-card")).forEach(x=>x.disabled=true);
+        const name = b.dataset.name;
+        try{
+          const ap = await addApertura(name);
+          showToast(`Apertura registrada: ${name} — ${fmtDate(ap.ts)}`, "ok");
+          render();
+        }catch(err){
+          showToast("No se pudo registrar: " + (err.message || err), "error");
+          Array.from(document.querySelectorAll("#desayList .prod-card")).forEach(x=>x.disabled=false);
+        }
       };
     });
   }
@@ -1361,6 +1597,7 @@
           <button data-tab="estadisticas" class="${adminTab==='estadisticas'?'active':''}">Estadísticas</button>
           <button data-tab="productos" class="${adminTab==='productos'?'active':''}">Productos</button>
           <button data-tab="empleados" class="${adminTab==='empleados'?'active':''}">Empleados</button>
+          <button data-tab="desayunador" class="${adminTab==='desayunador'?'active':''}">🥐 Desayunador</button>
         </div>
         <div id="adminContent"></div>
       </section>
@@ -1432,6 +1669,7 @@
     if(adminTab === "estadisticas") renderAdminEstadisticas(content);
     if(adminTab === "productos") renderAdminProductos(content);
     if(adminTab === "empleados") renderAdminEmpleados(content);
+    if(adminTab === "desayunador") renderAdminDesayunador(content);
   }
 
   function renderAdminMovimientos(content){
@@ -1812,7 +2050,7 @@
         <div class="add-cat-row">
           <input type="text" id="newCatInput" placeholder="Nueva categoría" style="flex:1 1 100%;">
           <div class="cat-role-checks">
-            ${ROLES.map(r=>`
+            ${CATEGORY_ROLES.map(r=>`
               <label class="cat-role-check"><input type="checkbox" class="newCatRole" value="${esc(r)}"> ${esc(r)}</label>
             `).join("")}
           </div>
@@ -1852,7 +2090,7 @@
           <input type="text" value="${esc(c.name)}" data-idx="${i}" class="catName">
           <button class="small-btn" data-idx="${i}" data-action="delCat">Quitar</button>
           <div class="cat-role-checks" style="order:5;flex:1 1 100%;">
-            ${ROLES.map(r=>`
+            ${CATEGORY_ROLES.map(r=>`
               <label class="cat-role-check">
                 <input type="checkbox" class="catRole" data-idx="${i}" value="${esc(r)}" ${(c.roles||[]).includes(r)?"checked":""}> ${esc(r)}
               </label>
@@ -1983,7 +2221,10 @@
         <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
           Cada empleado necesita su nombre y un PIN propio para poder registrar movimientos.
           El rol determina qué categorías puede ver (eso se configura por categoría, en la pestaña
-          Productos). "Todas las categorías" deja al empleado sin restricción.
+          Productos). "Todas las categorías" deja al empleado sin restricción. El rol Desayunador
+          usa el mismo asistente que los demás roles: al elegir la categoría 🥐 Desayunador,
+          en vez de cantidad y área, registra directamente la apertura de cada producto
+          (ver también la pestaña 🥐 Desayunador, con el historial y las estadísticas).
         </p>
         <div id="empList"></div>
         <button class="btn btn-secondary" id="addEmpBtn" style="margin-top:8px;">+ Agregar empleado</button>
@@ -2070,6 +2311,302 @@
       config.adminPin = val;
       await saveConfig();
       alert("PIN de administrador actualizado.");
+    };
+  }
+
+  // =======================================================================
+  // ADMIN > 🥐 DESAYUNADOR — historial de aperturas, estadísticas y la
+  // lista configurable de productos. Acá el administrador ve TODO
+  // (todas las empleadas, todos los productos, sin restricción).
+  // =======================================================================
+  function renderAdminDesayunador(content){
+    content.innerHTML = `
+      <div class="tabs" style="margin-bottom:14px;">
+        <button data-sub="historial" class="${desayAdminSub==='historial'?'active':''}">Historial de aperturas</button>
+        <button data-sub="estadisticas" class="${desayAdminSub==='estadisticas'?'active':''}">Estadísticas</button>
+        <button data-sub="productos" class="${desayAdminSub==='productos'?'active':''}">Productos</button>
+      </div>
+      <div id="desaySubContent"></div>
+    `;
+    Array.from(content.querySelectorAll("[data-sub]")).forEach(b=>{
+      b.onclick = () => { desayAdminSub = b.dataset.sub; render(); };
+    });
+    const sub = content.querySelector("#desaySubContent");
+    if(desayAdminSub === "historial") renderDesayHistorial(sub);
+    else if(desayAdminSub === "estadisticas") renderDesayEstadisticas(sub);
+    else renderDesayProductos(sub);
+  }
+
+  // --- Historial de aperturas: filtro por producto, fecha desde/hasta y
+  // atajos rápidos de Día/Semana/Mes. Permite borrar/corregir un registro
+  // cargado por error, siempre con confirmación previa. ---
+  function renderDesayHistorial(content){
+    const prodOptions = ["Todos", ...desayunoProductos.map(p=>p.name)];
+    content.innerHTML = `
+      <div class="card">
+        <h2>Historial de aperturas</h2>
+        <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
+          Todos los registros de apertura, de todas las empleadas. Usá los filtros para acotar.
+        </p>
+        <div class="filters">
+          <select id="haProd">${prodOptions.map(p=>`<option>${esc(p)}</option>`).join("")}</select>
+        </div>
+        <div class="filters" style="align-items:flex-end;">
+          <div style="flex:1;min-width:130px;">
+            <label style="margin-bottom:4px;">Desde</label>
+            <input type="date" id="haDesde" style="margin-bottom:0;">
+          </div>
+          <div style="flex:1;min-width:130px;">
+            <label style="margin-bottom:4px;">Hasta</label>
+            <input type="date" id="haHasta" style="margin-bottom:0;">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0 14px;">
+          <button class="small-btn" data-quick="dia">Día (hoy)</button>
+          <button class="small-btn" data-quick="semana">Semana</button>
+          <button class="small-btn" data-quick="mes">Mes</button>
+          <button class="small-btn" id="haClear">Limpiar fechas</button>
+        </div>
+        <div style="max-height:420px;overflow:auto;">
+          <table>
+            <thead><tr><th>Fecha y hora</th><th>Producto</th><th>Empleada</th><th></th></tr></thead>
+            <tbody id="haTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+    function getRange(){
+      const fd = document.getElementById("haDesde").value;
+      const fh = document.getElementById("haHasta").value;
+      return {
+        desdeTs: fd ? new Date(fd+"T00:00:00").getTime() : null,
+        hastaTs: fh ? new Date(fh+"T23:59:59.999").getTime() : null
+      };
+    }
+    function draw(){
+      const fp = document.getElementById("haProd").value;
+      const {desdeTs, hastaTs} = getRange();
+      const rows = aperturas
+        .filter(a => (fp==="Todos"||a.product===fp) && (desdeTs===null||a.ts>=desdeTs) && (hastaTs===null||a.ts<=hastaTs))
+        .sort((a,b)=>b.ts-a.ts);
+      document.getElementById("haTbody").innerHTML = rows.length ? rows.map(a=>`
+        <tr>
+          <td>${fmtDate(a.ts)}</td><td>${esc(a.product)}</td><td>${esc(a.employeeName)}</td>
+          <td><button class="small-btn small-btn-danger" data-id="${esc(a.id)}" data-action="delApertura">Borrar</button></td>
+        </tr>
+      `).join("") : `<tr><td colspan="4"><div class="empty">Sin aperturas para este filtro.</div></td></tr>`;
+      Array.from(document.querySelectorAll("[data-action='delApertura']")).forEach(btn=>{
+        btn.onclick = async () => {
+          const a = aperturas.find(x=>x.id===btn.dataset.id);
+          if(!confirm(`¿Está seguro que desea quitar el registro de apertura de "${a?esc(a.product):""}" (${a?fmtDate(a.ts):""})?`)) return;
+          try{
+            await deleteApertura(btn.dataset.id);
+            showToast("Apertura eliminada", "ok");
+          }catch(err){
+            alert("No se pudo borrar: " + (err.message || err));
+          }
+          draw();
+        };
+      });
+    }
+    document.getElementById("haProd").onchange = draw;
+    document.getElementById("haDesde").onchange = draw;
+    document.getElementById("haHasta").onchange = draw;
+    document.getElementById("haClear").onclick = () => {
+      document.getElementById("haDesde").value = "";
+      document.getElementById("haHasta").value = "";
+      draw();
+    };
+    Array.from(document.querySelectorAll("[data-quick]")).forEach(btn=>{
+      btn.onclick = () => {
+        const now = new Date();
+        let desde, hasta = now;
+        if(btn.dataset.quick === "dia"){
+          desde = now;
+        }else if(btn.dataset.quick === "semana"){
+          const diffToMonday = (now.getDay()+6)%7; // lunes=0
+          desde = new Date(now.getFullYear(), now.getMonth(), now.getDate()-diffToMonday);
+        }else{
+          desde = new Date(now.getFullYear(), now.getMonth(), 1);
+        }
+        document.getElementById("haDesde").value = toDateInputValue(desde);
+        document.getElementById("haHasta").value = toDateInputValue(hasta);
+        draw();
+      };
+    });
+    draw();
+  }
+
+  // --- Estadísticas: cada cuánto tiempo se abre cada producto, con
+  // filtro de período (hoy / 7 días / 30 días / este mes / mes anterior /
+  // personalizado) y una tabla comparativa ordenable. ---
+  function renderDesayEstadisticas(content){
+    content.innerHTML = `
+      <div class="card">
+        <h2>Estadísticas · Desayunador</h2>
+        <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
+          Objetivo: saber cada cuánto tiempo se abre cada producto.
+        </p>
+        <label>Período</label>
+        <select id="dePeriod">
+          <option value="hoy">Hoy</option>
+          <option value="7d">Últimos 7 días</option>
+          <option value="30d" selected>Últimos 30 días</option>
+          <option value="mes">Este mes</option>
+          <option value="mesant">Mes anterior</option>
+          <option value="custom">Personalizado</option>
+        </select>
+        <div id="deCustomRange" style="display:none;margin-top:12px;">
+          <div class="filters" style="align-items:flex-end;">
+            <div style="flex:1;min-width:130px;"><label style="margin-bottom:4px;">Desde</label><input type="date" id="deDesde" style="margin-bottom:0;"></div>
+            <div style="flex:1;min-width:130px;"><label style="margin-bottom:4px;">Hasta</label><input type="date" id="deHasta" style="margin-bottom:0;"></div>
+          </div>
+        </div>
+      </div>
+      <div id="deProductCards"></div>
+      <div class="card">
+        <h2>Comparación de productos</h2>
+        <label>Ordenar por</label>
+        <select id="deSortMode">
+          <option value="masAperturas">Mayor cantidad de aperturas</option>
+          <option value="menosAperturas">Menor cantidad de aperturas</option>
+          <option value="masFrecuencia">Mayor frecuencia (se abre más seguido)</option>
+          <option value="menosFrecuencia">Menor frecuencia (se abre menos seguido)</option>
+        </select>
+        <div style="overflow:auto;">
+          <table>
+            <thead><tr><th>Producto</th><th>Aperturas</th><th>Promedio</th></tr></thead>
+            <tbody id="deCompareTbody"></tbody>
+          </table>
+        </div>
+      </div>
+    `;
+    const periodSel = document.getElementById("dePeriod");
+    const customBlock = document.getElementById("deCustomRange");
+    periodSel.onchange = () => {
+      customBlock.style.display = periodSel.value === "custom" ? "block" : "none";
+      draw();
+    };
+    document.getElementById("deSortMode").onchange = drawCompare;
+    document.getElementById("deDesde").onchange = draw;
+    document.getElementById("deHasta").onchange = draw;
+
+    let lastStats = [];
+
+    function getRange(){
+      const custom = periodSel.value === "custom";
+      const cd = custom ? document.getElementById("deDesde").value : null;
+      const ch = custom ? document.getElementById("deHasta").value : null;
+      return resolveDesayPeriod(periodSel.value, cd, ch);
+    }
+
+    function draw(){
+      const {desde, hasta} = getRange();
+      lastStats = desayunoProductos.map(p => {
+        const rows = aperturas.filter(a => a.product===p.name && (desde===null||a.ts>=desde) && (hasta===null||a.ts<=hasta));
+        return { name: p.name, stats: computeAperturaStats(rows) };
+      });
+      document.getElementById("deProductCards").innerHTML = lastStats.map(({name, stats}) => {
+        if(stats.count === 0){
+          return `
+            <div class="card">
+              <h2>${esc(name.toUpperCase())}</h2>
+              <div class="empty">Sin aperturas registradas en este período.</div>
+            </div>
+          `;
+        }
+        const suficiente = stats.count >= 2;
+        return `
+          <div class="card">
+            <h2>${esc(name.toUpperCase())}</h2>
+            <div class="stat-grid" style="margin-bottom:12px;">
+              <div class="stat-card"><div class="num">${stats.count}</div><div class="lbl">Aperturas</div></div>
+              <div class="stat-card"><div class="num" style="font-size:14px;">${esc(fmtDate(stats.first))}</div><div class="lbl">Primera apertura</div></div>
+              <div class="stat-card"><div class="num" style="font-size:14px;">${esc(fmtDate(stats.last))}</div><div class="lbl">Última apertura</div></div>
+            </div>
+            <p style="font-size:13px;margin:6px 0;"><strong>Promedio entre aperturas:</strong> ${suficiente ? esc(fmtDuration(stats.avgMs)) : "Datos insuficientes"}</p>
+            <p style="font-size:13px;margin:6px 0;"><strong>Mediana entre aperturas:</strong> ${suficiente ? esc(fmtDuration(stats.medianMs)) : "Datos insuficientes"}</p>
+            ${suficiente ? `<p style="font-size:13px;margin:6px 0;color:var(--ink-soft);">Interpretación: "Se abre aproximadamente ${esc(fmtRoughFrequency(stats.avgMs))}."</p>` : ""}
+            <div class="stat-grid" style="margin-top:10px;">
+              <div class="stat-card"><div class="num">${suficiente ? stats.perDay.toFixed(2) : "—"}</div><div class="lbl">Aperturas / día</div></div>
+              <div class="stat-card"><div class="num">${suficiente ? stats.perWeek.toFixed(1) : "—"}</div><div class="lbl">Aperturas / semana</div></div>
+              <div class="stat-card"><div class="num">${suficiente ? stats.perMonth.toFixed(1) : "—"}</div><div class="lbl">Aperturas / mes</div></div>
+            </div>
+          </div>
+        `;
+      }).join("") || `<div class="card"><div class="empty">No hay productos configurados.</div></div>`;
+      drawCompare();
+    }
+
+    function drawCompare(){
+      const mode = document.getElementById("deSortMode").value;
+      let rows = lastStats.slice();
+      if(mode === "masAperturas") rows.sort((a,b)=>b.stats.count-a.stats.count);
+      else if(mode === "menosAperturas") rows.sort((a,b)=>a.stats.count-b.stats.count);
+      else if(mode === "masFrecuencia") rows.sort((a,b)=>(a.stats.avgMs ?? Infinity)-(b.stats.avgMs ?? Infinity));
+      else if(mode === "menosFrecuencia") rows.sort((a,b)=>(b.stats.avgMs ?? -Infinity)-(a.stats.avgMs ?? -Infinity));
+      document.getElementById("deCompareTbody").innerHTML = rows.length ? rows.map(({name,stats})=>`
+        <tr>
+          <td>${esc(name)}</td>
+          <td>${stats.count}</td>
+          <td>${stats.count>=2 ? esc(fmtFrequencyDecimal(stats.avgMs)) : "Datos insuficientes"}</td>
+        </tr>
+      `).join("") : `<tr><td colspan="3"><div class="empty">Sin datos.</div></td></tr>`;
+    }
+
+    draw();
+  }
+
+  // --- Lista configurable de productos del Desayunador (agregar/renombrar/
+  // quitar), siempre con confirmación antes de quitar uno. ---
+  function renderDesayProductos(content){
+    content.innerHTML = `
+      <div class="card">
+        <h2>Productos de desayuno</h2>
+        <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
+          Esta es la lista que ve la empleada de Desayunador para registrar aperturas.
+        </p>
+        <div id="desayProdList"></div>
+        <div class="add-cat-row">
+          <input type="text" id="newDesayProdInput" placeholder="Nuevo producto (ej: Café)">
+          <button class="small-btn" id="addDesayProdBtn">Agregar</button>
+        </div>
+      </div>
+    `;
+    function draw(){
+      document.getElementById("desayProdList").innerHTML = desayunoProductos.length ? desayunoProductos.map(p=>`
+        <div class="emp-row">
+          <input type="text" value="${esc(p.name)}" data-id="${esc(p.id)}" class="desayProdName">
+          <button class="small-btn" data-id="${esc(p.id)}" data-action="delDesayProd">Quitar</button>
+        </div>
+      `).join("") : `<div class="empty">No hay productos configurados.</div>`;
+      Array.from(document.querySelectorAll(".desayProdName")).forEach(inp=>{
+        inp.onchange = async () => {
+          const val = inp.value.trim();
+          if(!val) return;
+          await updateDesayunoProducto(inp.dataset.id, val);
+          const p = desayunoProductos.find(x=>x.id===inp.dataset.id);
+          if(p) p.name = val;
+        };
+      });
+      Array.from(document.querySelectorAll("[data-action='delDesayProd']")).forEach(btn=>{
+        btn.onclick = async () => {
+          const p = desayunoProductos.find(x=>x.id===btn.dataset.id);
+          if(!confirm(`¿Está seguro que desea quitar el producto "${p ? esc(p.name) : ""}"?`)) return;
+          await deleteDesayunoProducto(btn.dataset.id);
+          draw();
+        };
+      });
+    }
+    draw();
+    document.getElementById("addDesayProdBtn").onclick = async () => {
+      const input = document.getElementById("newDesayProdInput");
+      const val = input.value.trim();
+      if(!val) return;
+      if(desayunoProductos.some(p=>p.name.toLowerCase()===val.toLowerCase())){ alert("Ya existe ese producto."); return; }
+      await addDesayunoProducto(val);
+      input.value = "";
+      draw();
     };
   }
 
