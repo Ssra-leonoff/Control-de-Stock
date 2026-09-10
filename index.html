@@ -1892,6 +1892,7 @@
             alert("Esta categoría tiene productos cargados. Movelos o eliminalos primero.");
             return;
           }
+          if(!confirm(`¿Está seguro que desea quitar la categoría "${catName}"?`)) return;
           categories.splice(btn.dataset.idx,1);
           if(adminProdFilterCat === catName) adminProdFilterCat = "";
           await saveConfig();
@@ -1945,7 +1946,11 @@
         };
       });
       Array.from(document.querySelectorAll("[data-action='delProd']")).forEach(btn=>{
-        btn.onclick = async () => { await deleteProduct(btn.dataset.id); drawProds(); };
+        btn.onclick = async () => {
+          const p = products.find(x=>x.id===btn.dataset.id);
+          if(!confirm(`¿Está seguro que desea quitar el producto "${p ? p.name : ""}"?`)) return;
+          await deleteProduct(btn.dataset.id); drawProds();
+        };
       });
     }
     drawProds();
@@ -2043,7 +2048,11 @@
         };
       });
       Array.from(document.querySelectorAll("[data-action='del']")).forEach(btn=>{
-        btn.onclick = async () => { await deleteEmployee(employees[btn.dataset.idx].id); drawEmpList(); };
+        btn.onclick = async () => {
+          const e = employees[btn.dataset.idx];
+          if(!confirm(`¿Está seguro que desea quitar al empleado "${e.name}"?`)) return;
+          await deleteEmployee(e.id); drawEmpList();
+        };
       });
     }
     drawEmpList();
