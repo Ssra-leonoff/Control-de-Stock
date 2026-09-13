@@ -391,6 +391,7 @@
   let qtyValue = 1;
   let areaValue = "";
   let areaSelected = ""; // "Venta" | "Dirigentes" | "Otro" | "" — solo se usa para la categoría Bebidas
+  let comentarioValue = ""; // comentario obligatorio una vez elegida el área, para Bebidas
   let lastMovSuccess = false;
   let lastAperturaSuccess = false;
 
@@ -1352,6 +1353,7 @@
       qtyValue = 1;
       areaValue = "";
       areaSelected = "";
+      comentarioValue = "";
       saveSession({ type:"user", empId: emp.id });
       render();
     };
@@ -1368,6 +1370,7 @@
     qtyValue = 1;
     areaValue = "";
     areaSelected = "";
+    comentarioValue = "";
     clearSession();
     render();
   }
@@ -1501,6 +1504,7 @@
         qtyValue = 1;
         areaValue = "";
         areaSelected = "";
+        comentarioValue = "";
         formStep = "cantidad";
         render();
       };
@@ -1523,7 +1527,7 @@
             <button type="button" class="area-opt-btn${areaSelected==='Dirigentes'?' active':''}" data-val="Dirigentes">DIRIGENTES</button>
             <button type="button" class="area-opt-btn${areaSelected==='Otro'?' active':''}" data-val="Otro">OTRO</button>
           </div>
-          ${areaSelected==='Otro' ? `<input type="text" id="areaInput" placeholder="Especificá el área / destino..." value="${esc(areaValue)}">` : ``}
+          ${areaSelected ? `<label style="margin-top:6px;">Comentario</label><input type="text" id="comentarioInput" placeholder="${areaSelected==='Otro' ? 'Especificá el área / destino...' : 'Escribí un comentario...'}" value="${esc(comentarioValue)}">` : ``}
     ` : `
           <label style="margin-top:6px;">Área / destino (opcional)</label>
           <input type="text" id="areaInput" placeholder="Ej: Habitaciones, Cocina..." value="${esc(areaValue)}">
@@ -1556,12 +1560,19 @@
     if(esBebidas){
       Array.from(document.querySelectorAll(".area-opt-btn")).forEach(b=>{
         b.onclick = () => {
-          areaSelected = b.dataset.val;
-          if(areaSelected !== "Otro"){ areaValue = areaSelected; }
-          else { areaValue = ""; }
+          const nuevoVal = b.dataset.val;
+          if(areaSelected !== nuevoVal){ comentarioValue = ""; }
+          areaSelected = nuevoVal;
+          areaValue = areaSelected;
           render();
+          const ci = document.getElementById("comentarioInput");
+          if(ci) ci.focus();
         };
       });
+    }
+    const comentarioInput = document.getElementById("comentarioInput");
+    if(comentarioInput){
+      comentarioInput.oninput = () => { comentarioValue = comentarioInput.value; };
     }
     const areaInput = document.getElementById("areaInput");
 
@@ -1573,9 +1584,10 @@
           msg.innerHTML = `<div class="msg error">Elegí una opción de área / destino.</div>`;
           return;
         }
-        areaValue = areaSelected === "Otro" ? (areaInput ? areaInput.value.trim() : "") : areaSelected;
-        if(areaSelected === "Otro" && !areaValue){
-          msg.innerHTML = `<div class="msg error">Escribí el área / destino.</div>`;
+        areaValue = areaSelected;
+        comentarioValue = comentarioInput ? comentarioInput.value.trim() : comentarioValue.trim();
+        if(!comentarioValue){
+          msg.innerHTML = `<div class="msg error">Completá el comentario para continuar.</div>`;
           return;
         }
       } else {
@@ -1584,7 +1596,8 @@
       const mov = {
         employeeId: currentUser.id, employeeName: currentUser.name,
         product: prod.name, category: prod.category,
-        qty: qtyValue, type: "Salida", area: areaValue, ts: Date.now()
+        qty: qtyValue, type: "Salida", area: areaValue,
+        comment: esBebidas ? comentarioValue : "", ts: Date.now()
       };
       btn.disabled = true;
       btn.textContent = "Guardando...";
@@ -1604,6 +1617,7 @@
         qtyValue = 1;
         areaValue = "";
         areaSelected = "";
+        comentarioValue = "";
         lastMovSuccess = true;
         formStep = "lista";
         render();
@@ -1676,7 +1690,7 @@
               const puedeBorrar = (Date.now() - m.ts) < SELF_DELETE_WINDOW_MS;
               return `
               <div class="movrow">
-                <div><div>${esc(m.product)}</div><div class="meta">${esc(m.category||"")} · ${fmtDate(m.ts)}${m.area? " · "+esc(m.area):""}</div></div>
+                <div><div>${esc(m.product)}</div><div class="meta">${esc(m.category||"")} · ${fmtDate(m.ts)}${m.area? " · "+esc(m.area):""}${m.comment? " · "+esc(m.comment):""}</div></div>
                 <div style="display:flex;align-items:center;gap:10px;">
                   <div class="qty">-${m.qty}</div>
                   ${puedeBorrar ? `<button class="small-btn small-btn-danger" data-id="${esc(m.id)}" data-action="delMisMov">Borrar</button>` : ""}
@@ -1870,8 +1884,8 @@
         btn.textContent = originalText;
       }
       const movRows = movements.slice().sort((a,b)=>a.ts-b.ts);
-      const movAoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Timestamp"]];
-      movRows.forEach(m => movAoa.push([fmtDate(m.ts), m.employeeName, m.category||"", m.product, m.qty, m.area||"", m.ts]));
+      const movAoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Comentario","Timestamp"]];
+      movRows.forEach(m => movAoa.push([fmtDate(m.ts), m.employeeName, m.category||"", m.product, m.qty, m.area||"", m.comment||"", m.ts]));
 
       const summary = buildProductSummary(movements)
         .sort((a,b)=> (a.category||"").localeCompare(b.category||"") || a.product.localeCompare(b.product));
@@ -2016,9 +2030,9 @@
 
     document.getElementById("exportBtn").onclick = async () => {
       const rows = await getFiltered();
-      const aoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Timestamp"]];
+      const aoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Comentario","Timestamp"]];
       rows.slice().sort((a,b)=>a.ts-b.ts).forEach(m =>
-        aoa.push([fmtDate(m.ts), m.employeeName, m.category||"", m.product, m.qty, m.area||"", m.ts])
+        aoa.push([fmtDate(m.ts), m.employeeName, m.category||"", m.product, m.qty, m.area||"", m.comment||"", m.ts])
       );
       exportWorkbook([{name:"Movimientos", rows: aoa}], "movimientos_stock.xlsx");
     };
