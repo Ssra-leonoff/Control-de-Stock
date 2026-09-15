@@ -174,6 +174,7 @@
   .prod-list{display:flex;flex-direction:column;gap:14px;padding:6px 20px 22px;}
   .prod-card{background:#fff;border:2px solid var(--line);border-radius:20px;padding:22px;display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:20px;font-weight:700;color:var(--ink);box-shadow:var(--shadow-sm);cursor:pointer;text-align:left;font-family:inherit;}
   .prod-card:active{transform:scale(.97);background:var(--bg-soft);}
+  .prod-card-sub{display:inline-block;background:var(--amber-soft);color:var(--amber);font-size:10px;font-weight:800;letter-spacing:.3px;padding:2px 7px;border-radius:10px;vertical-align:middle;margin-left:4px;}
   .prod-card-medida{font-size:14px;font-weight:600;color:var(--ink-soft);white-space:nowrap;}
 
   .qty-wizard{display:flex;align-items:center;justify-content:center;gap:26px;margin:22px 0 8px;}
@@ -1087,7 +1088,7 @@
       if(session && session.type === "user"){
         const emp = employees.find(e => e.id === session.empId);
         if(emp){
-          currentUser = { id: emp.id, name: emp.name, categorias: emp.categorias || [] };
+          currentUser = { id: emp.id, name: emp.name, categorias: emp.categorias || [], subcategorias: emp.subcategorias || [] };
           view = "form";
         }else{
           clearSession();
@@ -1222,9 +1223,11 @@
     await db.collection("employees").doc(id).delete();
     employees = employees.filter(e => e.id !== id);
   }
-  async function addProduct(name, medida, category){
-    const ref = await db.collection("products").add({ name, medida, category });
-    products.push({ id: ref.id, name, medida, category });
+  async function addProduct(name, medida, category, sub){
+    const data = { name, medida, category };
+    if(sub) data.sub = sub;
+    const ref = await db.collection("products").add(data);
+    products.push({ id: ref.id, ...data });
   }
   async function updateProduct(id, data){
     await db.collection("products").doc(id).update(data);
@@ -1372,7 +1375,7 @@
         return;
       }
       await clearFailedAttempts(emp.id);
-      currentUser = { id: emp.id, name: emp.name, categorias: emp.categorias || [] };
+      currentUser = { id: emp.id, name: emp.name, categorias: emp.categorias || [], subcategorias: emp.subcategorias || [] };
       view = "form";
       formStep = "categoria";
       selectedCategory = null;
@@ -1507,6 +1510,10 @@
     const prodsInCat = esDesayunador
       ? desayunoProductos.slice().sort((a,b)=> a.name.localeCompare(b.name,"es",{sensitivity:"base"}))
       : products.filter(p=>p.category===selectedCategory)
+          // Los productos con "sub" (ej: subcategoría "SUM" dentro de Bebidas)
+          // solo se muestran a los empleados que tengan esa subcategoría
+          // habilitada explícitamente, aunque tengan acceso a la categoría.
+          .filter(p=>!p.sub || (currentUser.subcategorias||[]).includes(p.sub))
           .sort((a,b)=> (reqCount[b.name]||0) - (reqCount[a.name]||0) || a.name.localeCompare(b.name,"es",{sensitivity:"base"}));
 
     app.innerHTML = `
@@ -1516,7 +1523,7 @@
         <div class="prod-list">
           ${prodsInCat.length ? prodsInCat.map(p=>`
             <button type="button" class="prod-card" data-id="${esc(p.id)}">
-              <span>${esc(p.name)}</span>
+              <span>${esc(p.name)}${p.sub ? ` <span class="prod-card-sub">${esc(p.sub)}</span>` : ""}</span>
               <span class="prod-card-medida">${esc(p.medida||"")}</span>
             </button>
           `).join("") : `<div class="empty">${esDesayunador ? "Todavía no hay productos configurados. Pedile a un administrador que los cargue." : "No hay productos cargados en esta categoría."}</div>`}
@@ -2375,8 +2382,14 @@
           <input type="text" id="newProdName" placeholder="Nombre del producto">
           <input type="text" id="newProdMedida" placeholder="Medida (ej: 5L)">
           <select id="newProdCat">${catsForProductos.map(c=>`<option value="${esc(c.name)}" ${c.name===adminProdFilterCat?"selected":""}>${esc(c.name)}</option>`).join("")}</select>
+          <input type="text" id="newProdSub" placeholder="Subcategoría (opcional, ej: SUM)" style="flex:1 1 100%;">
           <button class="small-btn" id="addProdBtn">Agregar</button>
         </div>
+        <p style="color:var(--ink-soft);font-size:11.5px;margin:8px 0 0;">
+          La subcategoría es opcional: un producto con subcategoría (ej: "SUM" dentro de Bebidas) sigue
+          apareciendo en su categoría normal, pero queda oculto para los empleados hasta que se les
+          habilite esa subcategoría puntual en la pestaña Empleados.
+        </p>
       </div>
     `;
     function drawCats(){
@@ -2458,6 +2471,7 @@
           <select data-id="${esc(p.id)}" class="prodCat">
             ${categories.map(c=>`<option value="${esc(c.name)}" ${c.name===p.category?"selected":""}>${esc(c.name)}</option>`).join("")}
           </select>
+          <input type="text" value="${esc(p.sub||"")}" data-id="${esc(p.id)}" class="prodSub" placeholder="Subcategoría" style="max-width:110px;">
           <button class="small-btn" data-id="${esc(p.id)}" data-action="delProd">Quitar</button>
         </div>
       `).join("") || `<div class="empty">No hay productos en esta categoría.</div>`;
@@ -2467,6 +2481,13 @@
       });
       Array.from(document.querySelectorAll(".prodMedida")).forEach(inp=>{
         inp.onchange = async () => { const p=products.find(x=>x.id===inp.dataset.id); p.medida=inp.value.trim(); await updateProduct(p.id,{medida:p.medida}); };
+      });
+      Array.from(document.querySelectorAll(".prodSub")).forEach(inp=>{
+        inp.onchange = async () => {
+          const p=products.find(x=>x.id===inp.dataset.id);
+          p.sub=inp.value.trim();
+          await updateProduct(p.id,{sub:p.sub});
+        };
       });
       Array.from(document.querySelectorAll(".prodCat")).forEach(sel=>{
         sel.onchange = async () => {
@@ -2499,10 +2520,12 @@
       const name = document.getElementById("newProdName").value.trim();
       const medida = document.getElementById("newProdMedida").value.trim() || "Unidad";
       const cat = document.getElementById("newProdCat").value;
+      const sub = document.getElementById("newProdSub").value.trim();
       if(!name) return;
-      await addProduct(name, medida, cat);
+      await addProduct(name, medida, cat, sub);
       document.getElementById("newProdName").value = "";
       document.getElementById("newProdMedida").value = "";
+      document.getElementById("newProdSub").value = "";
       drawProds();
     };
   }
@@ -2528,7 +2551,16 @@
         <button class="btn btn-secondary" id="saveAdminPin">Guardar PIN admin</button>
       </div>
     `;
+    // Subcategorías restringidas (ej: "SUM" dentro de Bebidas): se calculan
+    // a partir de los productos que tengan el campo "sub" cargado, junto con
+    // la categoría a la que pertenecen, para poder aclarar "SUM (Bebidas)".
+    function getRestrictedSubcats(){
+      const map = new Map(); // sub -> categoría
+      products.forEach(p => { if(p.sub) map.set(p.sub, p.category); });
+      return Array.from(map.entries()).map(([sub,cat]) => ({sub, cat}));
+    }
     function drawEmpList(){
+      const subcats = getRestrictedSubcats();
       document.getElementById("empList").innerHTML = employees.map((e,i)=>`
         <div class="emp-row">
           <input type="text" value="${esc(e.name)}" data-idx="${i}" class="empName">
@@ -2541,6 +2573,16 @@
               </label>
             `).join("") || `<span style="font-size:12px;color:var(--ink-soft);">No hay categorías creadas todavía.</span>`}
           </div>
+          ${subcats.length ? `
+            <div style="order:4;flex:1 1 100%;font-size:11px;color:var(--ink-soft);margin-top:6px;">Subcategorías restringidas:</div>
+            <div class="multiselect-checks empSubcats" style="order:4;flex:1 1 100%;">
+              ${subcats.map(({sub,cat})=>`
+                <label class="multiselect-check">
+                  <input type="checkbox" class="empSubcat" data-idx="${i}" value="${esc(sub)}" ${(e.subcategorias||[]).includes(sub)?"checked":""}> 🔒 ${esc(sub)} <span style="color:var(--ink-soft);">(${esc(cat)})</span>
+                </label>
+              `).join("")}
+            </div>
+          ` : ""}
           ${isEmployeeLocked(e.id) ? `
             <div class="msg error" style="order:5;flex:1 1 100%;display:flex;justify-content:space-between;align-items:center;gap:8px;margin:2px 0 0;">
               <span>🔒 Bloqueado por intentos fallidos</span>
@@ -2582,6 +2624,18 @@
             e.categorias = e.categorias.filter(c=>c!==chk.value);
           }
           await updateEmployee(e.id, {categorias: e.categorias});
+        };
+      });
+      Array.from(document.querySelectorAll(".empSubcat")).forEach(chk=>{
+        chk.onchange = async () => {
+          const e = employees[chk.dataset.idx];
+          e.subcategorias = e.subcategorias || [];
+          if(chk.checked){
+            if(!e.subcategorias.includes(chk.value)) e.subcategorias.push(chk.value);
+          }else{
+            e.subcategorias = e.subcategorias.filter(s=>s!==chk.value);
+          }
+          await updateEmployee(e.id, {subcategorias: e.subcategorias});
         };
       });
       Array.from(document.querySelectorAll("[data-action='unlock']")).forEach(btn=>{
