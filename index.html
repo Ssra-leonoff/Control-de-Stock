@@ -174,7 +174,7 @@
   .prod-list{display:flex;flex-direction:column;gap:14px;padding:6px 20px 22px;}
   .prod-card{background:#fff;border:2px solid var(--line);border-radius:20px;padding:22px;display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:20px;font-weight:700;color:var(--ink);box-shadow:var(--shadow-sm);cursor:pointer;text-align:left;font-family:inherit;}
   .prod-card:active{transform:scale(.97);background:var(--bg-soft);}
-  .prod-card-sub{display:inline-block;background:var(--amber-soft);color:var(--amber);font-size:10px;font-weight:800;letter-spacing:.3px;padding:2px 7px;border-radius:10px;vertical-align:middle;margin-left:4px;}
+  .prod-card-sub{display:inline-block;background:var(--amber-soft);color:var(--amber);font-size:14px;font-weight:900;letter-spacing:.3px;padding:3px 10px;border-radius:10px;vertical-align:middle;margin-left:6px;}
   .prod-card-medida{font-size:14px;font-weight:600;color:var(--ink-soft);white-space:nowrap;}
 
   .qty-wizard{display:flex;align-items:center;justify-content:center;gap:26px;margin:22px 0 8px;}
@@ -1514,7 +1514,7 @@
           // solo se muestran a los empleados que tengan esa subcategoría
           // habilitada explícitamente, aunque tengan acceso a la categoría.
           .filter(p=>!p.sub || (currentUser.subcategorias||[]).includes(p.sub))
-          .sort((a,b)=> (reqCount[b.name]||0) - (reqCount[a.name]||0) || a.name.localeCompare(b.name,"es",{sensitivity:"base"}));
+          .sort((a,b)=> (a.sub?1:0) - (b.sub?1:0) || (reqCount[b.name]||0) - (reqCount[a.name]||0) || a.name.localeCompare(b.name,"es",{sensitivity:"base"}));
 
     app.innerHTML = `
       ${topbarWizard(selectedCategory)}
