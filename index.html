@@ -2011,7 +2011,7 @@
         </div>
         <div style="max-height:420px;overflow:auto;">
           <table>
-            <thead><tr><th>Fecha</th><th>Empleado</th><th>Categoría</th><th>Producto</th><th>Cant.</th><th></th></tr></thead>
+            <thead><tr><th>Fecha</th><th>Empleado</th><th>Categoría</th><th>Producto</th><th>Cant.</th><th>Área / destino</th><th>Comentario</th><th></th></tr></thead>
             <tbody id="movTbody"></tbody>
           </table>
         </div>
@@ -2041,22 +2041,23 @@
       const desdeTsCheck = fd ? new Date(fd+"T00:00:00").getTime() : null;
       const tbody = document.getElementById("movTbody");
       if(desdeTsCheck !== null && desdeTsCheck < movementsLoadedSinceTs){
-        tbody.innerHTML = `<tr><td colspan="6"><div class="empty">Cargando movimientos de ese rango de fechas...</div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8"><div class="empty">Cargando movimientos de ese rango de fechas...</div></td></tr>`;
       }
       let rows;
       try{
         rows = await getFiltered();
       }catch(err){
-        tbody.innerHTML = `<tr><td colspan="6"><div class="msg error">No se pudo cargar ese rango: ${esc(err.message||err)}</div></td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="8"><div class="msg error">No se pudo cargar ese rango: ${esc(err.message||err)}</div></td></tr>`;
         return;
       }
       tbody.innerHTML = rows.length ? rows.map(m=>`
         <tr>
           <td>${fmtDate(m.ts)}</td><td>${esc(m.employeeName)}</td><td>${esc(m.category||"")}</td>
           <td>${esc(m.product)}</td><td class="estado-reponer">-${m.qty}</td>
+          <td>${esc(m.area||"")}</td><td style="word-break:break-word;">${esc(m.comment||"")}</td>
           <td><button class="small-btn small-btn-danger" data-id="${esc(m.id)}" data-action="delMov">Borrar</button></td>
         </tr>
-      `).join("") : `<tr><td colspan="6"><div class="empty">Sin movimientos para este filtro.</div></td></tr>`;
+      `).join("") : `<tr><td colspan="8"><div class="empty">Sin movimientos para este filtro.</div></td></tr>`;
       Array.from(document.querySelectorAll("[data-action='delMov']")).forEach(btn=>{
         btn.onclick = async () => {
           if(!confirm("¿Borrar este movimiento? Esta acción no se puede deshacer.")) return;
@@ -2368,7 +2369,7 @@
         <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
           Estas son las categorías disponibles para registrar retiros. Qué categorías puede ver
           cada empleado se configura por empleado, en la pestaña Empleados. Cada categoría puede tener
-          subcategorías: los productos de una subcategoría solo los ven los empleados que tildes en ella.
+          subcategorías: qué empleados ven los productos de cada una también se elige en la pestaña Empleados.
         </p>
         <div id="catList"></div>
         <div class="add-cat-row">
@@ -2416,14 +2417,6 @@
               <div class="emp-row" style="border-bottom:none;margin-bottom:8px;padding-bottom:0;">
                 <input type="text" value="${esc(sc.name)}" class="subName" data-idx="${i}" data-sidx="${j}" style="flex:1 1 auto;min-width:100px;">
                 <button class="small-btn" data-action="delSub" data-idx="${i}" data-sidx="${j}">Quitar</button>
-                <div style="flex:1 1 100%;font-size:11.5px;color:var(--ink-soft);">Empleados que ven sus productos:</div>
-                <div class="multiselect-checks">
-                  ${employees.map(e=>`
-                    <label class="multiselect-check">
-                      <input type="checkbox" class="subEmp" data-idx="${i}" data-sidx="${j}" value="${esc(e.id)}" ${(sc.empleados||[]).includes(e.id)?"checked":""}> ${esc(e.name)}
-                    </label>
-                  `).join("") || `<span style="font-size:12px;color:var(--ink-soft);">No hay empleados creados todavía.</span>`}
-                </div>
               </div>
             `).join("")}
             <div class="add-cat-row" style="margin-top:4px;">
@@ -2508,18 +2501,6 @@
           sc.name = newName;
           await saveConfig();
           render();
-        };
-      });
-      Array.from(document.querySelectorAll(".subEmp")).forEach(chk=>{
-        chk.onchange = async () => {
-          const sc = categories[chk.dataset.idx].subcategorias[chk.dataset.sidx];
-          sc.empleados = sc.empleados || [];
-          if(chk.checked){
-            if(!sc.empleados.includes(chk.value)) sc.empleados.push(chk.value);
-          }else{
-            sc.empleados = sc.empleados.filter(id=>id!==chk.value);
-          }
-          await saveConfig();
         };
       });
       Array.from(document.querySelectorAll("[data-action='delSub']")).forEach(btn=>{
@@ -2634,7 +2615,7 @@
         <h2>Empleados y PIN</h2>
         <p style="color:var(--ink-soft);font-size:12px;margin-top:-8px;">
           Cada empleado necesita su nombre y un PIN propio para poder registrar movimientos.
-          Marcá qué categorías puede ver ese empleado al registrar un retiro; si no marcás
+          Marcá qué categorías (y subcategorías, si la categoría tiene) puede ver ese empleado al registrar un retiro; si no marcás
           ninguna, no va a ver ninguna categoría hasta que se le asigne al menos una. La
           categoría Desayunador usa el mismo asistente que las demás: al elegirla, en vez de
           cantidad y área, se confirma y registra directamente la apertura de cada producto
@@ -2662,6 +2643,16 @@
               </label>
             `).join("") || `<span style="font-size:12px;color:var(--ink-soft);">No hay categorías creadas todavía.</span>`}
           </div>
+          ${categories.map((c,ci)=>(c.subcategorias||[]).length ? `
+            <div class="multiselect-checks empSubs" style="order:4;flex:1 1 100%;margin-bottom:0;">
+              <span style="flex:1 1 100%;font-size:11.5px;color:var(--ink-soft);">Subcategorías de ${esc(c.name)}:</span>
+              ${c.subcategorias.map((sc,j)=>`
+                <label class="multiselect-check">
+                  <input type="checkbox" class="empSub" data-eidx="${i}" data-cidx="${ci}" data-sidx="${j}" ${(sc.empleados||[]).includes(e.id)?"checked":""}> ${esc(sc.name)}
+                </label>
+              `).join("")}
+            </div>
+          ` : "").join("")}
           ${isEmployeeLocked(e.id) ? `
             <div class="msg error" style="order:5;flex:1 1 100%;display:flex;justify-content:space-between;align-items:center;gap:8px;margin:2px 0 0;">
               <span>🔒 Bloqueado por intentos fallidos</span>
@@ -2703,6 +2694,19 @@
             e.categorias = e.categorias.filter(c=>c!==chk.value);
           }
           await updateEmployee(e.id, {categorias: e.categorias});
+        };
+      });
+      Array.from(document.querySelectorAll(".empSub")).forEach(chk=>{
+        chk.onchange = async () => {
+          const e = employees[chk.dataset.eidx];
+          const sc = categories[chk.dataset.cidx].subcategorias[chk.dataset.sidx];
+          sc.empleados = sc.empleados || [];
+          if(chk.checked){
+            if(!sc.empleados.includes(e.id)) sc.empleados.push(e.id);
+          }else{
+            sc.empleados = sc.empleados.filter(id=>id!==e.id);
+          }
+          await saveConfig();
         };
       });
       Array.from(document.querySelectorAll("[data-action='unlock']")).forEach(btn=>{
