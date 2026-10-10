@@ -1022,10 +1022,11 @@
       // no espere una respuesta tras otra. "deletedMovStats" queda afuera
       // a propósito: solo se usa en la pestaña Estadísticas del admin,
       // así que se trae recién ahí (ver ensureDeletedStatsLoaded).
-      const [configSnap, empSnap, laSnap] = await Promise.all([
+      const [configSnap, empSnap, laSnap, seededFlags] = await Promise.all([
         configRef.get(),
         db.collection("employees").get(),
-        db.collection("loginAttempts").get()
+        db.collection("loginAttempts").get(),
+        getSeededFlags()
       ]);
 
       // "loadedCategories" puede traer temporalmente un campo "roles" viejo
@@ -1059,18 +1060,16 @@
         categoriesNeedSave = true;
       }
 
-      if(empSnap.empty){
-        const batch = db.batch();
-        DEFAULT_EMPLOYEES.forEach(([name, pin]) => {
-          const ref = db.collection("employees").doc();
-          batch.set(ref, { name, pin, categorias: [] });
-        });
-        await batch.commit();
-        const refreshed = await db.collection("employees").get();
-        employees = refreshed.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Los empleados por defecto se siembran SOLO la primera vez (marca
+      // "employees" en meta/seeded). Si después se borran todos a propósito,
+      // no vuelven a aparecer.
+      if(!seededFlags.employees && empSnap.empty){
+        employees = await seedCollection("employees", "emp", DEFAULT_EMPLOYEES,
+          ([name, pin]) => ({ name, pin, categorias: [] }), ([name]) => name);
       }else{
         employees = empSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       }
+      if(!seededFlags.employees) await markSeeded("employees");
 
       // Migración: empleados que todavía tienen el campo "role" (sistema de
       // roles, discontinuado) en vez de "categorias" pasan a tener la lista
@@ -1131,26 +1130,21 @@
   // mensaje de carga (ver whenBackgroundDataReady).
   async function loadBackgroundData(){
     const cutoffTs = Date.now() - RECENT_MOVEMENTS_DAYS * 24 * 60 * 60 * 1000;
-    const [prodSnap, movSnap, desayProdSnap, aperturasSnap] = await Promise.all([
+    const [prodSnap, movSnap, desayProdSnap, aperturasSnap, seededFlags] = await Promise.all([
       db.collection("products").get(),
       db.collection("movements").where("ts", ">=", cutoffTs).get(),
       db.collection("desayunoProductos").get(),
-      db.collection("aperturas").get()
+      db.collection("aperturas").get(),
+      getSeededFlags()
     ]);
     products = prodSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     movements = movSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     movementsLoadedSinceTs = cutoffTs;
     aperturas = aperturasSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-    if(desayProdSnap.empty){
-      const batch = db.batch();
-      const refs = DEFAULT_DESAYUNO.map(([name, medida]) => {
-        const ref = db.collection("desayunoProductos").doc();
-        batch.set(ref, { name, medida });
-        return ref;
-      });
-      await batch.commit();
-      desayunoProductos = refs.map((ref, i) => ({ id: ref.id, name: DEFAULT_DESAYUNO[i][0], medida: DEFAULT_DESAYUNO[i][1] }));
+    if(!seededFlags.desayuno && desayProdSnap.empty){
+      desayunoProductos = await seedCollection("desayunoProductos", "desay", DEFAULT_DESAYUNO,
+        ([name, medida]) => ({ name, medida }), ([name]) => name);
     }else{
       desayunoProductos = desayProdSnap.docs.map(d => ({ id: d.id, ...d.data() }));
       // Migración: productos de desayuno cargados antes de que existiera el
@@ -1168,32 +1162,24 @@
       }
     }
 
-    async function seedCategory(catName, defaults){
-      const hasAny = products.some(p => p.category === catName);
-      if(!hasAny && defaults.length){
-        const batch = db.batch();
-        defaults.forEach(([name, medida]) => {
-          const ref = db.collection("products").doc();
-          batch.set(ref, { name, medida, category: catName });
-        });
-        await batch.commit();
-        return true;
-      }
-      return false;
-    }
-    // Las 3 categorías por defecto se revisan/siembran en paralelo,
-    // ya que son independientes entre sí.
-    const seededAny = (await Promise.all([
-      seedCategory("Productos de limpieza", DEFAULT_CLEANING),
-      seedCategory("Mantenimiento", DEFAULT_MAINTENANCE),
-      seedCategory("Bebidas", DEFAULT_BEVERAGES)
-    ])).some(Boolean);
+    if(!seededFlags.desayuno) await markSeeded("desayuno");
 
-    // Solo se vuelve a pedir la lista de productos si realmente se
-    // sembró algo nuevo (caso raro, típicamente solo la primera vez).
-    if(seededAny){
-      const refreshedProd = await db.collection("products").get();
-      products = refreshedProd.docs.map(d => ({ id: d.id, ...d.data() }));
+    // Los productos por defecto se siembran SOLO la primera vez, y solo si
+    // la colección está completamente vacía. Antes se re-sembraba cada
+    // categoría que estuviera vacía en cada carga (por eso reaparecían
+    // productos borrados o se duplicaban si dos dispositivos abrían a la vez).
+    if(!seededFlags.products){
+      if(prodSnap.empty){
+        const defaults = [
+          ...DEFAULT_CLEANING.map(([name, medida]) => ({ name, medida, category: "Productos de limpieza" })),
+          ...DEFAULT_MAINTENANCE.map(([name, medida]) => ({ name, medida, category: "Mantenimiento" })),
+          ...DEFAULT_BEVERAGES.map(([name, medida]) => ({ name, medida, category: "Bebidas" }))
+        ];
+        const created = await seedCollection("products", "prod", defaults,
+          d => d, d => d.category + " " + d.name);
+        products = products.concat(created);
+      }
+      await markSeeded("products");
     }
 
     backgroundDataReady = true;
@@ -1229,6 +1215,39 @@
       adminPin: config.adminPin, stock: config.stock, categories
     });
   }
+
+  // ---- Sembrado inicial único ----------------------------------------
+  // Los datos por defecto (productos, empleados, desayuno) se cargan UNA
+  // sola vez: queda una marca en meta/seeded. Además se guardan con IDs
+  // fijos (derivados del nombre), así que aunque dos dispositivos siembren
+  // al mismo tiempo, escriben los mismos documentos y no se duplica nada.
+  async function getSeededFlags(){
+    const snap = await db.collection("meta").doc("seeded").get();
+    return snap.exists ? snap.data() : {};
+  }
+  async function markSeeded(key){
+    await db.collection("meta").doc("seeded").set({ [key]: true }, { merge: true });
+  }
+  function seedDocId(prefix, text){
+    const slug = String(text).normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+    return prefix + "-" + slug;
+  }
+  // Escribe una lista por defecto con IDs fijos y devuelve los docs creados.
+  async function seedCollection(collName, prefix, items, toData, keyOf){
+    const used = new Set();
+    const batch = db.batch();
+    const created = items.map((it, i) => {
+      let id = seedDocId(prefix, keyOf(it));
+      if(used.has(id)) id += "-" + i;
+      used.add(id);
+      const data = toData(it);
+      batch.set(db.collection(collName).doc(id), data);
+      return { id, ...data };
+    });
+    await batch.commit();
+    return created;
+  }
   async function addEmployee(name, pin, categorias){
     const ref = await db.collection("employees").add({ name, pin, categorias: categorias || [] });
     employees.push({ id: ref.id, name, pin, categorias: categorias || [] });
@@ -1248,6 +1267,32 @@
   }
   async function updateProduct(id, data){
     await db.collection("products").doc(id).update(data);
+  }
+  // Devuelve los documentos SOBRANTES de una lista: agrupa por una clave
+  // (nombre normalizado) y en cada grupo conserva uno, el de mayor "score"
+  // (por ejemplo el que tiene subcategoría asignada).
+  function findDuplicateDocs(list, keyFn, scoreFn){
+    const norm = t => String(t).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/\s+/g," ").trim();
+    const groups = new Map();
+    list.forEach(item => {
+      const k = norm(keyFn(item));
+      if(!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(item);
+    });
+    const extras = [];
+    groups.forEach(arr => {
+      if(arr.length < 2) return;
+      const keep = arr.slice().sort((a,b) => (scoreFn ? scoreFn(b)-scoreFn(a) : 0))[0];
+      arr.forEach(x => { if(x !== keep) extras.push(x); });
+    });
+    return extras;
+  }
+  async function deleteDocsBulk(collName, ids){
+    for(let i=0;i<ids.length;i+=400){
+      const batch = db.batch();
+      ids.slice(i, i+400).forEach(id => batch.delete(db.collection(collName).doc(id)));
+      await batch.commit();
+    }
   }
   async function deleteProduct(id){
     await db.collection("products").doc(id).delete();
@@ -2399,6 +2444,7 @@
           </div>
         </div>
         <div id="prodList"></div>
+        <button class="small-btn" id="cleanDupProdBtn" style="margin-top:10px;">Limpiar productos duplicados</button>
         <div class="prod-row" style="margin-top:10px;">
           <input type="text" id="newProdName" placeholder="Nombre del producto">
           <input type="text" id="newProdMedida" placeholder="Medida (ej: 5L)">
@@ -2596,12 +2642,34 @@
       drawProds();
     };
 
+    document.getElementById("cleanDupProdBtn").onclick = async () => {
+      const dups = findDuplicateDocs(products, p => (p.category||"")+"|"+(p.name||""), p => p.subcategory ? 1 : 0);
+      if(!dups.length){ alert("No hay productos duplicados."); return; }
+      const sample = dups.slice(0,10).map(p => p.name).join(", ");
+      if(!confirm(`Se encontraron ${dups.length} producto(s) duplicado(s) (mismo nombre y categoría). Se va a conservar uno de cada uno y quitar el resto.\n\nEj: ${sample}\n\n¿Continuar?`)) return;
+      await deleteDocsBulk("products", dups.map(p=>p.id));
+      products = products.filter(p => !dups.some(d => d.id === p.id));
+      drawProds();
+      alert(`Listo: se quitaron ${dups.length} duplicado(s).`);
+    };
+
     document.getElementById("addProdBtn").onclick = async () => {
       const name = document.getElementById("newProdName").value.trim();
       const medida = document.getElementById("newProdMedida").value.trim() || "Unidad";
       const cat = document.getElementById("newProdCat").value;
       if(!name) return;
-      await addProduct(name, medida, cat, document.getElementById("newProdSub").value);
+      if(products.some(p => p.category===cat && (p.name||"").trim().toLowerCase()===name.toLowerCase())){
+        alert("Ya existe ese producto en la categoría.");
+        return;
+      }
+      const addBtn = document.getElementById("addProdBtn");
+      if(addBtn.disabled) return;
+      addBtn.disabled = true;
+      try{
+        await addProduct(name, medida, cat, document.getElementById("newProdSub").value);
+      }finally{
+        addBtn.disabled = false;
+      }
       document.getElementById("newProdName").value = "";
       document.getElementById("newProdMedida").value = "";
       document.getElementById("newProdSub").value = "";
@@ -3128,6 +3196,7 @@
           La medida es el detalle que ve a la derecha de cada producto (ej: Paquete, Caja, Sachet).
         </p>
         <div id="desayProdList"></div>
+        <button class="small-btn" id="cleanDupDesayBtn" style="margin-top:10px;">Limpiar productos duplicados</button>
         <div class="prod-row" style="margin-top:10px;">
           <input type="text" id="newDesayProdInput" placeholder="Nuevo producto (ej: Café)">
           <input type="text" id="newDesayProdMedida" placeholder="Medida" style="max-width:90px;">
@@ -3170,6 +3239,16 @@
       });
     }
     draw();
+    document.getElementById("cleanDupDesayBtn").onclick = async () => {
+      const dups = findDuplicateDocs(desayunoProductos, p => p.name||"");
+      if(!dups.length){ alert("No hay productos duplicados."); return; }
+      const sample = dups.slice(0,10).map(p => p.name).join(", ");
+      if(!confirm(`Se encontraron ${dups.length} producto(s) duplicado(s). Se va a conservar uno de cada uno y quitar el resto.\n\nEj: ${sample}\n\n¿Continuar?`)) return;
+      await deleteDocsBulk("desayunoProductos", dups.map(p=>p.id));
+      desayunoProductos = desayunoProductos.filter(p => !dups.some(d => d.id === p.id));
+      draw();
+      alert(`Listo: se quitaron ${dups.length} duplicado(s).`);
+    };
     document.getElementById("addDesayProdBtn").onclick = async () => {
       const input = document.getElementById("newDesayProdInput");
       const medidaInput = document.getElementById("newDesayProdMedida");
