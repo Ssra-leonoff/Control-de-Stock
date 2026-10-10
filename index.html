@@ -875,6 +875,8 @@
         const product = String(r["Producto"]||"").trim();
         const qty = parseInt(r["Cantidad"], 10);
         if(!product || !qty) return;
+        const estado = String(r["Estado"]||"").trim();
+        if(estado === "Borrado") return; // los borrados por empleados no se reimportan como movimientos vivos
         const employeeName = String(r["Empleado"]||"").trim();
         const category = String(r["Categoría"]||"").trim();
         const area = String(r["Área"]||"").trim();
@@ -883,7 +885,8 @@
         const emp = empByName.get(employeeName);
         toAdd.push({
           employeeId: emp ? emp.id : "", employeeName: employeeName || "Desconocido",
-          product, category, qty, type:"Salida", area, ts
+          product, category, qty, type:"Salida", area, ts,
+          ...(estado === "Modificado" ? { modified: true } : {})
         });
       });
       for(let i=0;i<toAdd.length;i+=400){
@@ -902,7 +905,7 @@
   // Agrupa movimientos por producto+categoría y suma las cantidades retiradas.
   function buildProductSummary(rows){
     const map = new Map();
-    rows.forEach(m=>{
+    rows.filter(m => !m.deleted).forEach(m=>{
       const key = m.product + "|" + (m.category||"");
       if(!map.has(key)) map.set(key, {product:m.product, category:m.category||"", total:0, count:0});
       const entry = map.get(key);
@@ -1345,11 +1348,37 @@
     deletedStatsLoaded = true;
   }
   const SELF_DELETE_WINDOW_MS = 5 * 60 * 1000; // 5 minutos para que un empleado borre su propio movimiento
+  // Cuando un EMPLEADO borra un movimiento, no se elimina de la base: se
+  // marca como borrado (deleted:true). Los empleados dejan de verlo, pero
+  // el administrador lo sigue viendo en Movimientos (marcado como borrado)
+  // y no cuenta en los totales.
   async function deleteMovement(id){
+    const mov = movements.find(m => m.id === id);
+    if(!mov || mov.deleted) return;
+    const data = { deleted: true, deletedAt: Date.now(), deletedBy: (currentUser && currentUser.name) || mov.employeeName || "" };
+    await db.collection("movements").doc(id).update(data);
+    Object.assign(mov, data);
+    await registerDeletedMovement(mov);
+  }
+  // Borrado definitivo: solo desde el panel de administrador.
+  async function hardDeleteMovement(id){
     const mov = movements.find(m => m.id === id);
     await db.collection("movements").doc(id).delete();
     movements = movements.filter(m => m.id !== id);
-    if(mov) await registerDeletedMovement(mov);
+    // Si ya estaba borrado por un empleado, ya se contó en las estadísticas.
+    if(mov && !mov.deleted) await registerDeletedMovement(mov);
+  }
+  // Modificar un movimiento: solo desde el panel de administrador. Queda
+  // marcado como "modificado" y se guarda el valor original la primera vez.
+  async function updateMovementAdmin(id, changes){
+    const mov = movements.find(m => m.id === id);
+    if(!mov) return;
+    const data = { ...changes, modified: true, modifiedAt: Date.now() };
+    if(!mov.modOriginal){
+      data.modOriginal = { qty: mov.qty, area: mov.area || "", comment: mov.comment || "" };
+    }
+    await db.collection("movements").doc(id).update(data);
+    Object.assign(mov, data);
   }
   async function deleteAllMovements(){
     // "Borrar todos" tiene que borrar TODO el historial, no solo lo que
@@ -1486,7 +1515,7 @@
 
   function getMisMovs(){
     return movements
-      .filter(m => m.employeeId === currentUser.id)
+      .filter(m => m.employeeId === currentUser.id && !m.deleted)
       .sort((a,b)=>b.ts-a.ts)
       .slice(0,5);
   }
@@ -1569,7 +1598,7 @@
   function renderFormProducto(allowedCats){
     const esDesayunador = selectedCategory === "Desayunador";
     const reqCount = {};
-    movements.forEach(m => { reqCount[m.product] = (reqCount[m.product]||0) + 1; });
+    movements.forEach(m => { if(m.deleted) return; reqCount[m.product] = (reqCount[m.product]||0) + 1; });
     const prodsInCat = esDesayunador
       ? desayunoProductos.slice().sort((a,b)=> a.name.localeCompare(b.name,"es",{sensitivity:"base"}))
       : products.filter(p=>p.category===selectedCategory && canSeeProduct(p, currentUser.id))
@@ -1982,8 +2011,8 @@
         btn.textContent = originalText;
       }
       const movRows = movements.slice().sort((a,b)=>a.ts-b.ts);
-      const movAoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Comentario","Timestamp"]];
-      movRows.forEach(m => movAoa.push([fmtDate(m.ts), m.employeeName, m.category||"", m.product, m.qty, m.area||"", m.comment||"", m.ts]));
+      const movAoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Comentario","Timestamp","Estado"]];
+      movRows.forEach(m => movAoa.push([fmtDate(m.ts), m.employeeName, m.category||"", m.product, m.qty, m.area||"", m.comment||"", m.ts, m.deleted ? "Borrado" : (m.modified ? "Modificado" : "")]));
 
       const summary = buildProductSummary(movements)
         .sort((a,b)=> (a.category||"").localeCompare(b.category||"") || a.product.localeCompare(b.product));
@@ -2035,6 +2064,7 @@
   }
 
   function renderAdminMovimientos(content){
+    let editingMovId = null;
     const empOptions = ["Todos", ...new Set(movements.map(m=>m.employeeName))];
     const catOptions = ["Todas", ...categories.map(c=>c.name)];
     content.innerHTML = `
@@ -2056,7 +2086,7 @@
         </div>
         <div style="max-height:420px;overflow:auto;">
           <table>
-            <thead><tr><th>Fecha</th><th>Empleado</th><th>Categoría</th><th>Producto</th><th>Cant.</th><th>Área / destino</th><th>Comentario</th><th></th></tr></thead>
+            <thead><tr><th>Fecha</th><th>Empleado</th><th>Categoría</th><th>Producto</th><th>Cant.</th><th>Área / destino</th><th>Comentario</th><th>Estado</th><th></th></tr></thead>
             <tbody id="movTbody"></tbody>
           </table>
         </div>
@@ -2095,19 +2125,77 @@
         tbody.innerHTML = `<tr><td colspan="8"><div class="msg error">No se pudo cargar ese rango: ${esc(err.message||err)}</div></td></tr>`;
         return;
       }
-      tbody.innerHTML = rows.length ? rows.map(m=>`
+      tbody.innerHTML = rows.length ? rows.map(m=>{
+        if(editingMovId === m.id){
+          return `
         <tr>
           <td>${fmtDate(m.ts)}</td><td>${esc(m.employeeName)}</td><td>${esc(m.category||"")}</td>
-          <td>${esc(m.product)}</td><td class="estado-reponer">-${m.qty}</td>
+          <td>${esc(m.product)}</td>
+          <td><input type="number" min="1" step="1" id="editQty" value="${m.qty}" style="width:64px;margin:0;"></td>
+          <td><input type="text" id="editArea" value="${esc(m.area||"")}" style="min-width:90px;margin:0;"></td>
+          <td><input type="text" id="editComment" maxlength="36" value="${esc(m.comment||"")}" style="min-width:90px;margin:0;"></td>
+          <td></td>
+          <td style="white-space:nowrap;">
+            <button class="small-btn" data-id="${esc(m.id)}" data-action="saveEditMov">Guardar</button>
+            <button class="small-btn" data-action="cancelEditMov">Cancelar</button>
+          </td>
+        </tr>`;
+        }
+        const estado = m.deleted
+          ? `<span style="color:var(--red);font-weight:600;">Borrado por ${esc(m.deletedBy||m.employeeName||"empleado")}</span><div class="meta">${m.deletedAt ? fmtDate(m.deletedAt) : ""}</div>`
+          : (m.modified
+            ? `<span style="color:#b45309;font-weight:600;">Modificado</span><div class="meta">${m.modifiedAt ? fmtDate(m.modifiedAt) : ""}${m.modOriginal ? " · Original: -" + esc(m.modOriginal.qty) + (m.modOriginal.area ? ", " + esc(m.modOriginal.area) : "") + (m.modOriginal.comment ? ", " + esc(m.modOriginal.comment) : "") : ""}</div>`
+            : "");
+        const rowStyle = m.deleted ? ' style="opacity:.6;"' : "";
+        const qtyStyle = m.deleted ? ' style="text-decoration:line-through;"' : "";
+        return `
+        <tr${rowStyle}>
+          <td>${fmtDate(m.ts)}</td><td>${esc(m.employeeName)}</td><td>${esc(m.category||"")}</td>
+          <td>${esc(m.product)}</td><td class="estado-reponer"${qtyStyle}>-${m.qty}</td>
           <td>${esc(m.area||"")}</td><td style="word-break:break-word;">${esc(m.comment||"")}</td>
-          <td><button class="small-btn small-btn-danger" data-id="${esc(m.id)}" data-action="delMov">Borrar</button></td>
-        </tr>
-      `).join("") : `<tr><td colspan="8"><div class="empty">Sin movimientos para este filtro.</div></td></tr>`;
+          <td>${estado}</td>
+          <td style="white-space:nowrap;">
+            ${m.deleted ? "" : `<button class="small-btn" data-id="${esc(m.id)}" data-action="editMov">Editar</button>`}
+            <button class="small-btn small-btn-danger" data-id="${esc(m.id)}" data-action="delMov">${m.deleted ? "Quitar definitivamente" : "Borrar"}</button>
+          </td>
+        </tr>`;
+      }).join("") : `<tr><td colspan="9"><div class="empty">Sin movimientos para este filtro.</div></td></tr>`;
+      Array.from(document.querySelectorAll("[data-action='editMov']")).forEach(btn=>{
+        btn.onclick = () => { editingMovId = btn.dataset.id; drawRows(); };
+      });
+      Array.from(document.querySelectorAll("[data-action='cancelEditMov']")).forEach(btn=>{
+        btn.onclick = () => { editingMovId = null; drawRows(); };
+      });
+      Array.from(document.querySelectorAll("[data-action='saveEditMov']")).forEach(btn=>{
+        btn.onclick = async () => {
+          const mov = movements.find(m => m.id === btn.dataset.id);
+          const qty = parseInt(document.getElementById("editQty").value, 10);
+          const area = document.getElementById("editArea").value.trim();
+          const comment = document.getElementById("editComment").value.trim().slice(0,36);
+          if(!qty || qty < 1){ alert("La cantidad tiene que ser un número mayor a 0."); return; }
+          if(mov && qty === mov.qty && area === (mov.area||"") && comment === (mov.comment||"")){
+            editingMovId = null; drawRows(); return;
+          }
+          btn.disabled = true;
+          try{
+            await updateMovementAdmin(btn.dataset.id, { qty, area, comment });
+            showToast("Movimiento modificado", "ok");
+            editingMovId = null;
+          }catch(err){
+            alert("No se pudo modificar: " + (err.message || err));
+          }
+          drawRows();
+        };
+      });
       Array.from(document.querySelectorAll("[data-action='delMov']")).forEach(btn=>{
         btn.onclick = async () => {
-          if(!confirm("¿Borrar este movimiento? Esta acción no se puede deshacer.")) return;
+          const mov = movements.find(m => m.id === btn.dataset.id);
+          const msg = mov && mov.deleted
+            ? "Este movimiento ya fue borrado por un empleado. ¿Quitarlo definitivamente? Ya no va a aparecer en ningún lado y esta acción no se puede deshacer."
+            : "¿Borrar este movimiento definitivamente? Esta acción no se puede deshacer.";
+          if(!confirm(msg)) return;
           try{
-            await deleteMovement(btn.dataset.id);
+            await hardDeleteMovement(btn.dataset.id);
             showToast("Movimiento eliminado", "ok");
           }catch(err){
             alert("No se pudo borrar: " + (err.message || err));
@@ -2129,9 +2217,9 @@
 
     document.getElementById("exportBtn").onclick = async () => {
       const rows = await getFiltered();
-      const aoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Comentario","Timestamp"]];
+      const aoa = [["Fecha","Empleado","Categoría","Producto","Cantidad","Área","Comentario","Timestamp","Estado"]];
       rows.slice().sort((a,b)=>a.ts-b.ts).forEach(m =>
-        aoa.push([fmtDate(m.ts), m.employeeName, m.category||"", m.product, m.qty, m.area||"", m.comment||"", m.ts])
+        aoa.push([fmtDate(m.ts), m.employeeName, m.category||"", m.product, m.qty, m.area||"", m.comment||"", m.ts, m.deleted ? "Borrado" : (m.modified ? "Modificado" : "")])
       );
       exportWorkbook([{name:"Movimientos", rows: aoa}], "movimientos_stock.xlsx");
     };
@@ -2201,7 +2289,7 @@
       if(desdeTs !== null && desdeTs < movementsLoadedSinceTs){
         await ensureMovementsLoadedFrom(desdeTs);
       }
-      return movements.filter(m => (fe==="Todos"||m.employeeName===fe) && (fc==="Todas"||m.category===fc)
+      return movements.filter(m => !m.deleted && (fe==="Todos"||m.employeeName===fe) && (fc==="Todas"||m.category===fc)
         && (desdeTs===null || m.ts >= desdeTs) && (hastaTs===null || m.ts <= hastaTs));
     }
 
@@ -2309,7 +2397,7 @@
       if(desdeTs !== null && desdeTs < movementsLoadedSinceTs){
         await ensureMovementsLoadedFrom(desdeTs);
       }
-      return movements.filter(m => (desdeTs===null || m.ts >= desdeTs) && (hastaTs===null || m.ts <= hastaTs));
+      return movements.filter(m => !m.deleted && (desdeTs===null || m.ts >= desdeTs) && (hastaTs===null || m.ts <= hastaTs));
     }
 
     function groupSum(rows, keyFn){
